@@ -1809,7 +1809,7 @@ impl<'a> BatchBuilder<'a> {
     }
 }
 
-trait BorderSideHelpers {
+pub trait BorderSideHelpers {
     fn border_color(&self,
                     scale_factor_0: f32,
                     scale_factor_1: f32,

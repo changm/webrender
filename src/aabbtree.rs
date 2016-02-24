@@ -2,8 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/*
 use euclid::{Point2D, Rect, Size2D};
-use internal_types::{CompiledNode, DrawListId, DrawListItemIndex, DrawListGroupId};
+use internal_types::{CompiledNode, DrawListId, DrawListItemIndex, DrawListGroupId, DisplayItemId};
 use resource_list::ResourceList;
 use util;
 
@@ -36,6 +37,7 @@ pub struct AABBTreeNode {
     pub is_visible: bool,
 
     pub draw_list_group_segments: Vec<DrawListGroupSegment>,
+    //pub items: Vec<DisplayItemId>,
 
     pub resource_list: Option<ResourceList>,
     pub compiled_node: Option<CompiledNode>,
@@ -49,6 +51,7 @@ impl AABBTreeNode {
             children: None,
             is_visible: false,
             resource_list: None,
+            //items: Vec::new(),
             draw_list_group_segments: Vec::new(),
             compiled_node: None,
         }
@@ -56,12 +59,14 @@ impl AABBTreeNode {
 
     #[inline]
     fn append_item(&mut self,
+                   //item_id: DisplayItemId,
                    draw_list_group_id: DrawListGroupId,
                    draw_list_id: DrawListId,
                    item_index: DrawListItemIndex,
                    rect: &Rect<f32>) {
         self.actual_rect = self.actual_rect.union(rect);
 
+//        self.items.push(item_id);
         let need_new_group = match self.draw_list_group_segments.last() {
             Some(group) => {
                 group.draw_list_group_id != draw_list_group_id
@@ -105,6 +110,8 @@ impl AABBTreeNode {
     }
 
     fn item_count(&self) -> usize {
+        panic!("todo");
+        /*
         let mut count = 0;
         for group in &self.draw_list_group_segments {
             for list in &group.index_buffers {
@@ -112,6 +119,7 @@ impl AABBTreeNode {
             }
         }
         count
+        */
     }
 }
 
@@ -147,6 +155,8 @@ impl AABBTree {
 
     #[allow(dead_code)]
     pub fn print(&self, node_index: NodeIndex, level: u32) {
+        panic!("todo");
+        /*
         let mut indent = String::new();
         for _ in 0..level {
             indent.push_str("  ");
@@ -167,6 +177,7 @@ impl AABBTree {
             self.print(NodeIndex(child_index+0), level+1);
             self.print(NodeIndex(child_index+1), level+1);
         }
+        */
     }
 
     #[inline(always)]
@@ -209,6 +220,7 @@ impl AABBTree {
     #[inline]
     pub fn insert(&mut self,
                   rect: Rect<f32>,
+                  //item_id: DisplayItemId) {
                   draw_list_group_id: DrawListGroupId,
                   draw_list_id: DrawListId,
                   item_index: DrawListItemIndex) {
@@ -309,3 +321,4 @@ impl AABBTree {
         }
     }
 }
+*/

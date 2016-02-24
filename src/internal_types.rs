@@ -5,7 +5,7 @@
 use app_units::Au;
 use batch::{VertexBuffer, Batch, VertexBufferId, OffsetParams, TileParams};
 use device::{TextureId, TextureFilter};
-use euclid::{Matrix4, Point2D, Rect, Size2D};
+use euclid::{Matrix4, Point2D, Point4D, Rect, Size2D};
 use fnv::FnvHasher;
 use freelist::{FreeListItem, FreeListItemId};
 use num::Zero;
@@ -19,6 +19,7 @@ use texture_cache::BorderType;
 use util::{self, RectVaryings};
 use webrender_traits::{FontKey, Epoch, ColorF, PipelineId};
 use webrender_traits::{ImageFormat, MixBlendMode, NativeFontHandle, DisplayItem, ScrollLayerId};
+use spatial_hash;
 
 #[derive(Hash, Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct DevicePixel(i32);
@@ -557,21 +558,109 @@ impl DrawLayer {
     }
 }
 
+// TODO(gw): Store this as a plane representation - this would give non-axis aligned clipping for "free".
+//           Could masks be calculated and stored per tile?
+//           Use a first pass to send all rectangles to VS and rasterize the PackedSceneItem below as screen space coords / planes
+//           in a form ready to be used by the paint shader!?
+
+#[derive(Clone, Copy, Debug)]    // TODO(gw): Remove me!
+pub struct PackedSceneVertex {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+
+    // TODO(gw): Encode these in a different texture, or palette or something...
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+
+    pub s: f32,
+    pub t: f32,
+
+    pub unused0: f32,
+    pub unused1: f32,
+}
+
+impl PackedSceneVertex {
+    pub fn new(pos: &Point4D<f32>,
+               color: &ColorF,
+               st: &Point2D<f32>) -> PackedSceneVertex {
+        PackedSceneVertex {
+            x: pos.x,
+            y: pos.y,
+            z: pos.z,
+            w: pos.w,
+            r: color.r,
+            g: color.g,
+            b: color.b,
+            a: color.a,
+            s: st.x,
+            t: st.y,
+            unused0: 0.0,
+            unused1: 0.0,
+        }
+    }
+}
+
+#[derive(Clone)]    // TODO(gw): Remove me!
+pub struct PackedSceneItem {
+    pub vertices: [PackedSceneVertex; 4],
+    pub radius: [f32; 4],
+    pub ref_point: [f32; 4],
+}
+
+pub struct PackedTile {
+    pub items: [PackedSceneItem; 256],
+    pub rect_count: [f32; 4],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DisplayItemId(pub u32);
+
+pub struct RenderTile {
+    pub packed_tiles: Vec<PackedTile>,
+    pub origin: Point2D<i32>,
+}
+
+impl RenderTile {
+    pub fn new(origin: Point2D<i32>) -> RenderTile {
+        RenderTile {
+            packed_tiles: Vec::new(),
+            origin: origin,
+        }
+    }
+}
+
 pub struct RendererFrame {
     pub pipeline_epoch_map: HashMap<PipelineId, Epoch, BuildHasherDefault<FnvHasher>>,
     pub layers_bouncing_back: HashSet<ScrollLayerId, BuildHasherDefault<FnvHasher>>,
-    pub root_layer: DrawLayer,
+    pub tiles: Vec<RenderTile>,
+    pub tile_size: Size2D<i32>,
+    //pub debug_info: spatial_hash::DebugInfo,
+    //pub root_layer: DrawLayer,
+
+    // TODO(gw): This should NOT be sent every frame - move to batch update or something similar!
+    //pub packed_scene: PackedScene,
 }
 
 impl RendererFrame {
     pub fn new(pipeline_epoch_map: HashMap<PipelineId, Epoch, BuildHasherDefault<FnvHasher>>,
                layers_bouncing_back: HashSet<ScrollLayerId, BuildHasherDefault<FnvHasher>>,
-               root_layer: DrawLayer)
-               -> RendererFrame {
+               tiles: Vec<RenderTile>,
+               tile_size: Size2D<i32>,
+               //packed_scene: PackedScene,
+               //debug_info: spatial_hash::DebugInfo,
+               /*root_layer: DrawLayer*/) -> RendererFrame {
         RendererFrame {
             pipeline_epoch_map: pipeline_epoch_map,
+            tiles: tiles,
+            tile_size: tile_size,
             layers_bouncing_back: layers_bouncing_back,
-            root_layer: root_layer,
+            //packed_scene: packed_scene,
+            //debug_info: debug_info,
+            //root_layer: root_layer,
         }
     }
 }

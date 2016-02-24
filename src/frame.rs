@@ -9,16 +9,20 @@ use euclid::{Rect, Point2D, Point3D, Point4D, Size2D, Matrix4};
 use fnv::FnvHasher;
 use geometry::ray_intersects_rect;
 use internal_types::{AxisDirection, LowLevelFilterOp, CompositionOp, DrawListItemIndex};
-use internal_types::{BatchUpdateList, ChildLayerIndex, DrawListId};
-use internal_types::{CompositeBatchInfo, CompositeBatchJob, MaskRegion};
+use internal_types::{BatchUpdateList, ChildLayerIndex, DrawListId, RenderTile, GlyphKey};
+use internal_types::{CompositeBatchInfo, CompositeBatchJob, MaskRegion, PackedSceneVertex};
 use internal_types::{RendererFrame, StackingContextInfo, BatchInfo, DrawCall, StackingContextIndex};
 use internal_types::{ANGLE_FLOAT_TO_FIXED, MAX_RECT, BatchUpdate, BatchUpdateOp, DrawLayer};
 use internal_types::{DrawCommand, ClearInfo, RenderTargetId, DrawListGroupId};
 use layer::{Layer, ScrollingState};
 use node_compiler::NodeCompiler;
+use internal_types::{ANGLE_FLOAT_TO_FIXED, MAX_RECT, BatchUpdate, BatchUpdateOp, DrawLayer, Glyph};
+use internal_types::{DrawCommand, ClearInfo, RenderTargetId, DrawListGroupId, DisplayItemId, BasicRotationAngle};
+//use layer::Layer;
+//use node_compiler::NodeCompiler;
 use renderer::CompositionOpHelpers;
 use resource_cache::ResourceCache;
-use resource_list::BuildRequiredResources;
+//use resource_list::BuildRequiredResources;
 use scene::{SceneStackingContext, ScenePipeline, Scene, SceneItem, SpecificSceneItem};
 use scoped_threadpool;
 use std::collections::{HashMap, HashSet};
@@ -36,6 +40,16 @@ const CAN_OVERSCROLL: bool = true;
 #[cfg(not(target_os = "macos"))]
 const CAN_OVERSCROLL: bool = false;
 
+use webrender_traits::{PipelineId, Epoch, ScrollPolicy, ScrollLayerId, StackingContext};
+use webrender_traits::{FilterOp, ImageFormat, MixBlendMode, StackingLevel};
+use webrender_traits::{SpecificDisplayItem, ColorF};
+use renderer::BLUR_INFLATION_FACTOR;
+//use resource_list::ResourceList;
+use spatial_hash::{self, SpatialHash};
+use batch_builder::BorderSideHelpers;
+use tessellator;
+use tessellator::BorderCornerTessellation;
+
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
 pub struct FrameId(pub u32);
 
@@ -50,7 +64,7 @@ pub struct DrawListGroup {
     // for a composite batch to be present, the next draw list must be
     // in a different render target!
     pub scroll_layer_id: ScrollLayerId,
-    pub render_target_id: RenderTargetId,
+    //pub render_target_id: RenderTargetId,
 
     pub draw_list_ids: Vec<DrawListId>,
 }
@@ -58,21 +72,21 @@ pub struct DrawListGroup {
 impl DrawListGroup {
     fn new(id: DrawListGroupId,
            scroll_layer_id: ScrollLayerId,
-           render_target_id: RenderTargetId) -> DrawListGroup {
+           /*render_target_id: RenderTargetId*/) -> DrawListGroup {
         DrawListGroup {
             id: id,
             scroll_layer_id: scroll_layer_id,
-            render_target_id: render_target_id,
+            //render_target_id: render_target_id,
             draw_list_ids: Vec::new(),
         }
     }
 
     fn can_add(&self,
                scroll_layer_id: ScrollLayerId,
-               render_target_id: RenderTargetId) -> bool {
+               /*render_target_id: RenderTargetId*/) -> bool {
         let scroll_ok = scroll_layer_id == self.scroll_layer_id;
-        let target_ok = render_target_id == self.render_target_id;
-        let size_ok = self.draw_list_ids.len() < MAX_MATRICES_PER_BATCH;
+        let target_ok = true; //render_target_id == self.render_target_id;
+        let size_ok = true; //self.draw_list_ids.len() < MAX_MATRICES_PER_BATCH;
         scroll_ok && target_ok && size_ok
     }
 
@@ -87,6 +101,7 @@ struct FlattenContext<'a> {
     pipeline_sizes: &'a mut HashMap<PipelineId, Size2D<f32>>,
     current_draw_list_group: Option<DrawListGroup>,
     device_pixel_ratio: f32,
+    spatial_hash: SpatialHash,
 }
 
 #[derive(Debug)]
@@ -102,6 +117,7 @@ struct FlattenInfo {
     perspective: Matrix4,
 }
 
+/*
 #[derive(Debug)]
 pub enum FrameRenderItem {
     Clear(ClearInfo),
@@ -365,22 +381,24 @@ impl RenderTarget {
     fn push_draw_list_group(&mut self, draw_list_group_id: DrawListGroupId) {
         self.items.push(FrameRenderItem::DrawListBatch(draw_list_group_id));
     }
-}
+}*/
 
 pub struct Frame {
-    pub layers: HashMap<ScrollLayerId, Layer, BuildHasherDefault<FnvHasher>>,
+    //pub layers: HashMap<ScrollLayerId, Layer, BuildHasherDefault<FnvHasher>>,
     pub pipeline_epoch_map: HashMap<PipelineId, Epoch, BuildHasherDefault<FnvHasher>>,
     pub pipeline_auxiliary_lists: HashMap<PipelineId,
                                           AuxiliaryLists,
                                           BuildHasherDefault<FnvHasher>>,
     pub pending_updates: BatchUpdateList,
-    pub root: Option<RenderTarget>,
+    //pub root: Option<RenderTarget>,
     pub stacking_context_info: Vec<StackingContextInfo>,
-    next_render_target_id: RenderTargetId,
-    next_draw_list_group_id: DrawListGroupId,
-    draw_list_groups: HashMap<DrawListGroupId, DrawListGroup, BuildHasherDefault<FnvHasher>>,
+    //next_render_target_id: RenderTargetId,
+    //next_draw_list_group_id: DrawListGroupId,
+    //draw_list_groups: HashMap<DrawListGroupId, DrawListGroup, BuildHasherDefault<FnvHasher>>,
     root_scroll_layer_id: Option<ScrollLayerId>,
     id: FrameId,
+
+    spatial_hash: Option<SpatialHash>,
 }
 
 enum SceneItemKind<'a> {
@@ -582,34 +600,41 @@ impl Frame {
             pipeline_epoch_map: HashMap::with_hasher(Default::default()),
             pending_updates: BatchUpdateList::new(),
             pipeline_auxiliary_lists: HashMap::with_hasher(Default::default()),
-            root: None,
-            layers: HashMap::with_hasher(Default::default()),
+            //root: None,
+            //layers: HashMap::with_hasher(Default::default()),
             stacking_context_info: Vec::new(),
-            next_render_target_id: RenderTargetId(0),
-            next_draw_list_group_id: DrawListGroupId(0),
-            draw_list_groups: HashMap::with_hasher(Default::default()),
+            //next_render_target_id: RenderTargetId(0),
+            //next_draw_list_group_id: DrawListGroupId(0),
+            //draw_list_groups: HashMap::with_hasher(Default::default()),
             root_scroll_layer_id: None,
             id: FrameId(0),
+
+            //packed_scene: None,
+            spatial_hash: None,
         }
     }
 
     pub fn reset(&mut self, resource_cache: &mut ResourceCache)
                  -> HashMap<ScrollLayerId, ScrollingState, BuildHasherDefault<FnvHasher>> {
-        self.draw_list_groups.clear();
+        //self.draw_list_groups.clear();
         self.pipeline_epoch_map.clear();
+        //self.packed_scene = None;
+        //self.next_display_item_id = 0;
         self.stacking_context_info.clear();
 
-        if let Some(mut root) = self.root.take() {
-            root.reset(&mut self.pending_updates, resource_cache);
-        }
+        //if let Some(mut root) = self.root.take() {
+        //    root.reset(&mut self.pending_updates, resource_cache);
+        //}
 
         // Free any render targets from last frame.
         // TODO: This should really re-use existing targets here...
+        /*
         let mut old_layer_scrolling_states = HashMap::with_hasher(Default::default());
         for (layer_id, mut old_layer) in &mut self.layers.drain() {
             old_layer.reset(&mut self.pending_updates);
             old_layer_scrolling_states.insert(layer_id, old_layer.scrolling);
         }
+        */
 
         // Advance to the next frame.
         self.id.0 += 1;
@@ -617,22 +642,27 @@ impl Frame {
         old_layer_scrolling_states
     }
 
+/*
     fn next_render_target_id(&mut self) -> RenderTargetId {
         let RenderTargetId(render_target_id) = self.next_render_target_id;
         self.next_render_target_id = RenderTargetId(render_target_id + 1);
         RenderTargetId(render_target_id)
     }
+*/
 
+/*
     fn next_draw_list_group_id(&mut self) -> DrawListGroupId {
         let DrawListGroupId(draw_list_group_id) = self.next_draw_list_group_id;
         self.next_draw_list_group_id = DrawListGroupId(draw_list_group_id + 1);
         DrawListGroupId(draw_list_group_id)
     }
+*/
 
     pub fn pending_updates(&mut self) -> BatchUpdateList {
         mem::replace(&mut self.pending_updates, BatchUpdateList::new())
     }
 
+/*
     pub fn get_scroll_layer(&self,
                             cursor: &Point2D<f32>,
                             scroll_layer_id: ScrollLayerId,
@@ -677,6 +707,7 @@ impl Frame {
             }
         })
     }
+*/
 
     pub fn scroll(&mut self,
                   mut delta: Point2D<f32>,
@@ -687,6 +718,8 @@ impl Frame {
             None => return,
         };
 
+        panic!("todo");
+        /*
         let scroll_layer_id = match self.get_scroll_layer(&cursor,
                                                           root_scroll_layer_id,
                                                           &Matrix4::identity()) {
@@ -748,7 +781,7 @@ impl Frame {
     pub fn tick_scrolling_bounce_animations(&mut self) {
         for (_, layer) in &mut self.layers {
             layer.tick_scrolling_bounce_animation()
-        }
+        }*/
     }
 
     pub fn create(&mut self,
@@ -771,14 +804,17 @@ impl Frame {
                                                                 .expect("root layer must be a scroll layer!");
                 self.root_scroll_layer_id = Some(root_scroll_layer_id);
 
+/*
                 let root_target_id = self.next_render_target_id();
 
                 let mut root_target = RenderTarget::new(root_target_id,
                                                         Point2D::zero(),
                                                         root_pipeline.viewport_size,
                                                         None);
+*/
 
                 // Insert global position: fixed elements layer
+/*
                 debug_assert!(self.layers.is_empty());
                 let root_fixed_layer_id = ScrollLayerId::create_fixed(root_pipeline_id);
                 self.layers.insert(root_fixed_layer_id,
@@ -786,6 +822,7 @@ impl Frame {
                                               root_stacking_context.stacking_context.overflow.size,
                                               root_pipeline.viewport_size,
                                               Matrix4::identity()));
+*/
 
                 // Work around borrow check on resource cache
                 {
@@ -795,6 +832,8 @@ impl Frame {
                         pipeline_sizes: pipeline_sizes,
                         current_draw_list_group: None,
                         device_pixel_ratio: device_pixel_ratio,
+                        //packed_scene: PackedScene::new(),
+                        spatial_hash: SpatialHash::new(Size2D::new(800, 600), Size2D::new(80, 60)),
                     };
 
                     let parent_info = FlattenInfo {
@@ -813,17 +852,21 @@ impl Frame {
                     self.flatten(root_pipeline,
                                  &parent_info,
                                  &mut context,
-                                 &mut root_target,
+                                 //&mut root_target,
                                  0);
-                    self.root = Some(root_target);
+                    //self.packed_scene = Some(context.packed_scene);
+                    self.spatial_hash = Some(context.spatial_hash);
+                    //self.root = Some(root_target);
 
+/*
                     if let Some(last_draw_list_group) = context.current_draw_list_group.take() {
                         self.draw_list_groups.insert(last_draw_list_group.id,
                                                      last_draw_list_group);
-                    }
+                    }*/
                 }
 
                 // TODO(gw): These are all independent - can be run through thread pool if it shows up in the profile!
+                /*
                 for (scroll_layer_id, layer) in &mut self.layers {
                     let scrolling_state = match old_layer_scrolling_states.get(&scroll_layer_id) {
                         Some(old_scrolling_state) => *old_scrolling_state,
@@ -831,7 +874,7 @@ impl Frame {
                     };
 
                     layer.finalize(&scrolling_state);
-                }
+                }*/
             }
         }
     }
@@ -839,7 +882,6 @@ impl Frame {
     fn add_items_to_target(&mut self,
                            scene_items: &[SceneItem],
                            info: &FlattenInfo,
-                           target: &mut RenderTarget,
                            context: &mut FlattenContext,
                            _level: i32) {
         let stacking_context_index = StackingContextIndex(self.stacking_context_info.len());
@@ -850,18 +892,249 @@ impl Frame {
             perspective: info.perspective,
         });
 
+        // hack hack hack!
         for item in scene_items {
             match item.specific {
                 SpecificSceneItem::DrawList(draw_list_id) => {
-                    let draw_list = context.resource_cache.get_draw_list_mut(draw_list_id);
+                    let draw_list = context.resource_cache.get_draw_list(draw_list_id);
+
+                    //let layer = self.layers.get_mut(&info.actual_scroll_layer_id).unwrap();
+                    for (item_index, item) in draw_list.items.iter().enumerate() {
+                        let item_index = DrawListItemIndex(item_index as u32);
+                        let rect = item.rect
+                                       .translate(&info.offset_from_current_layer);
+
+                        let v_tl = info.transform.transform_point4d(&Point4D::new(rect.origin.x,
+                                                                                  rect.origin.y,
+                                                                                  0.0,
+                                                                                  1.0));
+
+                        let v_tr = info.transform.transform_point4d(&Point4D::new(rect.top_right().x,
+                                                                                  rect.top_right().y,
+                                                                                  0.0,
+                                                                                  1.0));
+
+                        let v_bl = info.transform.transform_point4d(&Point4D::new(rect.bottom_left().x,
+                                                                                  rect.bottom_left().y,
+                                                                                  0.0,
+                                                                                  1.0));
+
+                        let v_br = info.transform.transform_point4d(&Point4D::new(rect.bottom_right().x,
+                                                                                  rect.bottom_right().y,
+                                                                                  0.0,
+                                                                                  1.0));
+
+                        match item.item {
+                            SpecificDisplayItem::WebGL(ref info) => {
+                                panic!("todo");
+                            }
+                            SpecificDisplayItem::Image(ref image_info) => {
+                                let image_info = context.resource_cache.get_image(image_info.image_key,
+                                                                                  image_info.image_rendering,
+                                                                                  self.id);
+
+                                let color = ColorF::new(1.0, 1.0, 1.0, 1.0);
+
+                                let vertices = [
+                                    PackedSceneVertex::new(&v_tl, &color, &image_info.uv_rect.top_left),
+                                    PackedSceneVertex::new(&v_bl, &color, &image_info.uv_rect.bottom_left),
+                                    PackedSceneVertex::new(&v_br, &color, &image_info.uv_rect.bottom_right),
+                                    PackedSceneVertex::new(&v_tr, &color, &image_info.uv_rect.top_right),
+                                ];
+
+                                context.spatial_hash.add_color_rectangle(&rect,
+                                                                         &color,
+                                                                         &info.transform,
+                                                                         &Size2D::zero(),
+                                                                         &Size2D::zero(),
+                                                                         &Point2D::zero());
+                            }
+                            SpecificDisplayItem::Text(ref text_info) => {
+                                let mut glyph_key = GlyphKey::new(text_info.font_key,
+                                                                  text_info.size,
+                                                                  text_info.blur_radius,
+                                                                  text_info.glyphs[0].index);
+                                let blur_offset = text_info.blur_radius.to_f32_px() * (BLUR_INFLATION_FACTOR as f32) / 2.0;
+
+                                for glyph in &text_info.glyphs {
+                                    glyph_key.index = glyph.index;
+                                    let image_info = context.resource_cache.get_glyph(&glyph_key, self.id);
+                                    if let Some(image_info) = image_info {
+                                        let x = glyph.x + image_info.user_data.x0 as f32 / context.device_pixel_ratio - blur_offset;
+                                        let y = glyph.y - image_info.user_data.y0 as f32 / context.device_pixel_ratio - blur_offset;
+
+                                        let width = image_info.requested_rect.size.width as f32 / context.device_pixel_ratio;
+                                        let height = image_info.requested_rect.size.height as f32 / context.device_pixel_ratio;
+
+                                        let v_tl = info.transform.transform_point4d(&Point4D::new(x,
+                                                                                                  y,
+                                                                                                  0.0,
+                                                                                                  1.0));
+
+                                        let v_tr = info.transform.transform_point4d(&Point4D::new(x + width,
+                                                                                                  y,
+                                                                                                  0.0,
+                                                                                                  1.0));
+
+                                        let v_bl = info.transform.transform_point4d(&Point4D::new(x,
+                                                                                                  y + height,
+                                                                                                  0.0,
+                                                                                                  1.0));
+
+                                        let v_br = info.transform.transform_point4d(&Point4D::new(x + width,
+                                                                                                  y + height,
+                                                                                                  0.0,
+                                                                                                  1.0));
+
+                                        let vertices = [
+                                            PackedSceneVertex::new(&v_tl, &text_info.color, &image_info.uv_rect.top_left),
+                                            PackedSceneVertex::new(&v_bl, &text_info.color, &image_info.uv_rect.bottom_left),
+                                            PackedSceneVertex::new(&v_br, &text_info.color, &image_info.uv_rect.bottom_right),
+                                            PackedSceneVertex::new(&v_tr, &text_info.color, &image_info.uv_rect.top_right),
+                                        ];
+
+                                        context.spatial_hash.add_color_rectangle(&Rect::new(Point2D::new(x, y), Size2D::new(width, height)),
+                                                                                 &text_info.color,
+                                                                                 &info.transform,
+                                                                                 &Size2D::zero(),
+                                                                                 &Size2D::zero(),
+                                                                                 &Point2D::zero());
+                                    }
+                                }
+                            }
+                            SpecificDisplayItem::Rectangle(ref rect_info) => {
+                                //println!("Rectangle {:?}", rect_info);
+                                let image_info = context.resource_cache.get_dummy_color_image();
+
+                                let vertices = [
+                                    PackedSceneVertex::new(&v_tl, &rect_info.color, &image_info.uv_rect.top_left),
+                                    PackedSceneVertex::new(&v_bl, &rect_info.color, &image_info.uv_rect.bottom_left),
+                                    PackedSceneVertex::new(&v_br, &rect_info.color, &image_info.uv_rect.bottom_right),
+                                    PackedSceneVertex::new(&v_tr, &rect_info.color, &image_info.uv_rect.top_right),
+                                ];
+
+                                context.spatial_hash.add_color_rectangle(&rect,
+                                                                         &rect_info.color,
+                                                                         &info.transform,
+                                                                         &Size2D::zero(),
+                                                                         &Size2D::zero(),
+                                                                         &Point2D::zero());
+                            }
+                            SpecificDisplayItem::Gradient(ref info) => {
+                                panic!("todo");
+                            }
+                            SpecificDisplayItem::BoxShadow(ref info) => {
+                                panic!("todo");
+                            }
+                            SpecificDisplayItem::Border(ref  border_info) => {
+                                let radius = &border_info.radius;
+                                let left = &border_info.left;
+                                let right = &border_info.right;
+                                let top = &border_info.top;
+                                let bottom = &border_info.bottom;
+
+                                //println!("r = {:?} {:?} {:?}", rect, radius, left);
+
+                                let tl_outer = Point2D::new(rect.origin.x, rect.origin.y);
+                                let tl_inner = tl_outer + Point2D::new(radius.top_left.width.max(left.width),
+                                                                       radius.top_left.height.max(top.width));
+
+                                let tr_outer = Point2D::new(rect.origin.x + rect.size.width, rect.origin.y);
+                                let tr_inner = tr_outer + Point2D::new(-radius.top_right.width.max(right.width),
+                                                                       radius.top_right.height.max(top.width));
+
+                                let bl_outer = Point2D::new(rect.origin.x, rect.origin.y + rect.size.height);
+                                let bl_inner = bl_outer + Point2D::new(radius.bottom_left.width.max(left.width),
+                                                                       -radius.bottom_left.height.max(bottom.width));
+
+                                let br_outer = Point2D::new(rect.origin.x + rect.size.width,
+                                                            rect.origin.y + rect.size.height);
+                                let br_inner = br_outer - Point2D::new(radius.bottom_right.width.max(right.width),
+                                                                       radius.bottom_right.height.max(bottom.width));
+
+                                let r0 = Rect::new(tl_outer,
+                                                   Size2D::new(tl_inner.x - tl_outer.x, tl_inner.y - tl_outer.y));
+
+                                let r1 = Rect::new(Point2D::new(bl_outer.x, bl_inner.y),
+                                                   Size2D::new(bl_inner.x - bl_outer.x, bl_outer.y - bl_inner.y));
+
+                                let r2 = Rect::new(br_inner,
+                                                   Size2D::new(br_outer.x - br_inner.x, br_outer.y - br_inner.y));
+
+                                let r3 = Rect::new(Point2D::new(tr_inner.x, tr_outer.y),
+                                                   Size2D::new(tr_outer.x - tr_inner.x, tr_inner.y - tr_outer.y));
+
+                                for rect_index in 0..tessellator::quad_count_for_border_corner(&radius.top_left,
+                                                                                               context.device_pixel_ratio) {
+                                    let tessellated_rect = r0.tessellate_border_corner(&radius.top_left,
+                                                                                       &border_info.top_left_inner_radius(),
+                                                                                        context.device_pixel_ratio,
+                                                                                        BasicRotationAngle::Upright,
+                                                                                        rect_index);
+                                    context.spatial_hash.add_color_rectangle(&tessellated_rect,
+                                                                             &left.color,
+                                                                             &info.transform,
+                                                                             &radius.top_left,
+                                                                             &border_info.top_left_inner_radius(),
+                                                                             &tl_inner);
+                                }
+
+                                for rect_index in 0..tessellator::quad_count_for_border_corner(&radius.bottom_left,
+                                                                                               context.device_pixel_ratio) {
+                                    let tessellated_rect = r1.tessellate_border_corner(&radius.bottom_left,
+                                                                                       &border_info.bottom_left_inner_radius(),
+                                                                                        context.device_pixel_ratio,
+                                                                                        BasicRotationAngle::Clockwise270,
+                                                                                        rect_index);
+                                    context.spatial_hash.add_color_rectangle(&tessellated_rect,
+                                                                             &top.color,
+                                                                             &info.transform,
+                                                                             &radius.bottom_left,
+                                                                             &border_info.bottom_left_inner_radius(),
+                                                                             &bl_inner);
+                                }
+
+                                for rect_index in 0..tessellator::quad_count_for_border_corner(&radius.bottom_right,
+                                                                                               context.device_pixel_ratio) {
+                                    let tessellated_rect = r2.tessellate_border_corner(&radius.bottom_right,
+                                                                                       &border_info.bottom_right_inner_radius(),
+                                                                                        context.device_pixel_ratio,
+                                                                                        BasicRotationAngle::Clockwise180,
+                                                                                        rect_index);
+                                    context.spatial_hash.add_color_rectangle(&tessellated_rect,
+                                                                             &right.color,
+                                                                             &info.transform,
+                                                                             &radius.bottom_right,
+                                                                             &border_info.bottom_right_inner_radius(),
+                                                                             &br_inner);
+                                }
+
+                                for rect_index in 0..tessellator::quad_count_for_border_corner(&radius.top_right,
+                                                                                               context.device_pixel_ratio) {
+                                    let tessellated_rect = r3.tessellate_border_corner(&radius.top_right,
+                                                                                       &border_info.top_right_inner_radius(),
+                                                                                        context.device_pixel_ratio,
+                                                                                        BasicRotationAngle::Clockwise90,
+                                                                                        rect_index);
+                                    context.spatial_hash.add_color_rectangle(&tessellated_rect,
+                                                                             &bottom.color,
+                                                                             &info.transform,
+                                                                             &radius.top_right,
+                                                                             &border_info.top_right_inner_radius(),
+                                                                             &tr_inner);
+                                }
+                            }
+                        }
+                    }
 
                     // Store draw context
-                    draw_list.stacking_context_index = Some(stacking_context_index);
+                    //draw_list.stacking_context_index = Some(stacking_context_index);
 
+                    /*
                     let needs_new_draw_group = match context.current_draw_list_group {
                         Some(ref draw_list_group) => {
                             !draw_list_group.can_add(info.actual_scroll_layer_id,
-                                                     target.id)
+                                                     /*target.id*/)
                         }
                         None => {
                             true
@@ -878,9 +1151,10 @@ impl Frame {
 
                         let new_draw_list_group = DrawListGroup::new(draw_list_group_id,
                                                                      info.actual_scroll_layer_id,
-                                                                     target.id);
+                                                                     /*target.id*/);
 
-                        target.push_draw_list_group(draw_list_group_id);
+                        panic!("todo");
+                        //target.push_draw_list_group(draw_list_group_id);
 
                         context.current_draw_list_group = Some(new_draw_list_group);
                     }
@@ -898,6 +1172,7 @@ impl Frame {
                                      draw_list_id,
                                      item_index);
                     }
+                    */
                 }
                 SpecificSceneItem::StackingContext(id, pipeline_id) => {
                     let stacking_context = context.scene
@@ -909,10 +1184,12 @@ impl Frame {
                     self.flatten(child,
                                  info,
                                  context,
-                                 target,
+                                 //target,
                                  _level+1);
                 }
                 SpecificSceneItem::Iframe(ref iframe_info) => {
+                    panic!("todo");
+                    /*
                     let pipeline = context.scene
                                           .pipeline_map
                                           .get(&iframe_info.id);
@@ -958,6 +1235,7 @@ impl Frame {
                                      target,
                                      _level+1);
                     }
+                    */
                 }
             }
         }
@@ -967,7 +1245,7 @@ impl Frame {
                scene_item: SceneItemKind,
                parent_info: &FlattenInfo,
                context: &mut FlattenContext,
-               target: &mut RenderTarget,
+               //target: &mut RenderTarget,
                level: i32) {
         let _pf = util::ProfileScope::new("  flatten");
 
@@ -1039,6 +1317,7 @@ impl Frame {
                         info.actual_scroll_layer_id = info.fixed_scroll_layer_id;
                     }
                     (ScrollPolicy::Scrollable, Some(scroll_layer_id)) => {
+                        /*
                         debug_assert!(!self.layers.contains_key(&scroll_layer_id));
                         let layer = Layer::new(parent_info.offset_from_origin,
                                                stacking_context.overflow.size,
@@ -1047,7 +1326,7 @@ impl Frame {
                         if parent_info.actual_scroll_layer_id != scroll_layer_id {
                             self.layers.get_mut(&parent_info.actual_scroll_layer_id).unwrap().add_child(scroll_layer_id);
                         }
-                        self.layers.insert(scroll_layer_id, layer);
+                        self.layers.insert(scroll_layer_id, layer);*/
                         info.default_scroll_layer_id = scroll_layer_id;
                         info.actual_scroll_layer_id = scroll_layer_id;
                         info.offset_from_current_layer = Point2D::zero();
@@ -1063,21 +1342,26 @@ impl Frame {
                 // are child stacking contexts, otherwise it is a redundant clear.
                 if stacking_context.establishes_3d_context &&
                    stacking_context.has_stacking_contexts {
+                    //panic!("todo");
+                    /*
                     target.push_clear(ClearInfo {
                         clear_color: false,
                         clear_z: true,
                         clear_stencil: true,
                     });
+                    */
                 }
 
                 // TODO: Account for scroll offset with transforms!
                 if composition_operations.is_empty() {
                     self.add_items_to_target(&scene_items,
                                              &info,
-                                             target,
+                                             //target,
                                              context,
                                              level);
                 } else {
+                    panic!("todo");
+                    /*
                     // TODO(gw): This makes the reftests work (mix_blend_mode) and
                     //           inline_stacking_context, but it seems wrong.
                     //           Need to investigate those and see what the root
@@ -1135,6 +1419,7 @@ impl Frame {
                                              level);
 
                     target.children.push(new_target);
+                    */
                 }
             }
         }
@@ -1146,36 +1431,40 @@ impl Frame {
                  device_pixel_ratio: f32)
                  -> RendererFrame {
         // Traverse layer trees to calculate visible nodes
-        for (_, layer) in &mut self.layers {
+/*        for (_, layer) in &mut self.layers {
             layer.cull();
-        }
+        }*/
 
         // Build resource list for newly visible nodes
-        self.update_resource_lists(resource_cache, thread_pool);
+        //self.update_resource_lists(resource_cache, thread_pool);
 
         // Update texture cache and build list of raster jobs.
-        self.update_texture_cache_and_build_raster_jobs(resource_cache);
+        //self.update_texture_cache_and_build_raster_jobs(resource_cache);
 
         // Rasterize needed glyphs on worker threads
-        self.raster_glyphs(thread_pool, resource_cache);
+        //self.raster_glyphs(thread_pool, resource_cache);
 
         // Compile nodes that have become visible
-        self.compile_visible_nodes(thread_pool, resource_cache, device_pixel_ratio);
+        //self.compile_visible_nodes(thread_pool, resource_cache, device_pixel_ratio);
 
+        /*
         // Update the batch cache from newly compiled nodes
         self.update_batch_cache();
+        */
 
         // Update the layer transform matrices
-        self.update_layer_transforms();
+        //self.update_layer_transforms();
 
         // Collect the visible batches into a frame
-        let frame = self.collect_and_sort_visible_batches(resource_cache, device_pixel_ratio);
+        //let frame = self.collect_and_sort_visible_batches(resource_cache, device_pixel_ratio);
+        let frame = self.build_frame();
 
         resource_cache.expire_old_resources(self.id);
 
         frame
     }
 
+/*
     fn update_layer_transform(&mut self,
                               layer_id: ScrollLayerId,
                               parent_transform: &Matrix4) {
@@ -1235,7 +1524,7 @@ impl Frame {
 
             thread_pool.scoped(|scope| {
                 for node in nodes {
-                    if node.is_visible && node.compiled_node.is_none() {
+                    if node.is_visible && node.resource_list.is_none() {
                         scope.execute(move || {
                             node.build_resource_list(resource_cache, pipeline_auxiliary_lists);
                         });
@@ -1244,7 +1533,9 @@ impl Frame {
             });
         }
     }
+*/
 
+/*
     pub fn update_texture_cache_and_build_raster_jobs(&mut self,
                                                       resource_cache: &mut ResourceCache) {
         let _pf = util::ProfileScope::new("  update_texture_cache_and_build_raster_jobs");
@@ -1259,14 +1550,68 @@ impl Frame {
             }
         }
     }
+*/
 
     pub fn raster_glyphs(&mut self,
                          thread_pool: &mut scoped_threadpool::Pool,
                          resource_cache: &mut ResourceCache) {
         let _pf = util::ProfileScope::new("  raster_glyphs");
-        resource_cache.raster_pending_glyphs(thread_pool, self.id);
+        //resource_cache.raster_pending_glyphs(thread_pool, self.id);
     }
 
+    fn build_frame(&mut self) -> RendererFrame {
+        /*let mut tiles = Vec::new();
+
+        for (_, layer) in &mut self.layers {
+            let nodes = &mut layer.aabb_tree.nodes;
+            for node in nodes {
+                if node.is_visible {
+                    let mut tile = RenderTile::new(node.actual_rect);
+                    for item_id in &node.items {
+                        tile.push(*item_id);
+                    }
+                    tiles.push(tile);
+                }
+            }
+        }
+
+        let packed_scene = match self.packed_scene {
+            Some(ref packed_scene) => {
+                packed_scene.clone()
+            }
+            None => {
+                PackedScene::new()
+            }
+        };
+
+        let debug_info = match self.spatial_hash {
+            Some(ref spatial_hash) => {
+                spatial_hash.build_debug_info()
+            }
+            None => {
+                spatial_hash::DebugInfo::empty()
+            }
+        };
+*/
+
+        let (tiles, tile_size) = match self.spatial_hash {
+            Some(ref spatial_hash) => {
+                (spatial_hash.build(), spatial_hash.tile_size)
+            }
+            None => {
+                (Vec::new(), Size2D::zero())
+            }
+        };
+
+        RendererFrame::new(self.pipeline_epoch_map.clone(),
+                           tiles,
+                           tile_size,
+                           //packed_scene,
+                           //debug_info
+                           )
+    }
+
+/*
     pub fn compile_visible_nodes(&mut self,
                                  thread_pool: &mut scoped_threadpool::Pool,
                                  resource_cache: &ResourceCache,
@@ -1296,8 +1641,9 @@ impl Frame {
                 }
             }
         });
-    }
+    }*/
 
+/*
     pub fn update_batch_cache(&mut self) {
         let _pf = util::ProfileScope::new("  update_batch_cache");
 
@@ -1358,5 +1704,5 @@ impl Frame {
             }
         }
         layers_bouncing_back
-    }
+    }*/
 }

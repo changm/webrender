@@ -2,9 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/*
 use aabbtree::{AABBTree, NodeIndex};
 use euclid::{Point2D, Rect, Size2D, Matrix4};
-use internal_types::{BatchUpdate, BatchUpdateList, BatchUpdateOp};
+use internal_types::{BatchUpdate, BatchUpdateList, BatchUpdateOp, DisplayItemId};
 use internal_types::{DrawListItemIndex, DrawListId, DrawListGroupId};
 use spring::{DAMPING, STIFFNESS, Spring};
 use webrender_traits::ScrollLayerId;
@@ -47,13 +48,14 @@ impl Layer {
 
     pub fn reset(&mut self, pending_updates: &mut BatchUpdateList) {
         for node in &mut self.aabb_tree.nodes {
+            /*
             if let Some(ref mut compiled_node) = node.compiled_node {
                 let vertex_buffer_id = compiled_node.vertex_buffer_id.take().unwrap();
                 pending_updates.push(BatchUpdate {
                     id: vertex_buffer_id,
                     op: BatchUpdateOp::Destroy,
                 });
-            }
+            }*/
         }
     }
 
@@ -136,3 +138,4 @@ impl ScrollingState {
     }
 }
 
+*/

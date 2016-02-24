@@ -683,7 +683,7 @@ impl Drop for VAO {
 pub struct TextureId(pub gl::GLuint);       // TODO: HACK: Should not be public!
 
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub struct ProgramId(gl::GLuint);
+pub struct ProgramId(pub gl::GLuint);
 
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub struct VAOId(gl::GLuint);
@@ -896,6 +896,15 @@ impl Device {
         f.read_to_string(&mut fragment_shader_preamble).unwrap();
         //file_watcher.add_watch(path);
 
+        let max_uniform_block_size = gl::get_integer_v(gl::MAX_UNIFORM_BLOCK_SIZE);
+        let max_vertex_uniform_blocks = gl::get_integer_v(gl::MAX_VERTEX_UNIFORM_BLOCKS);
+        let max_fragment_uniform_blocks = gl::get_integer_v(gl::MAX_FRAGMENT_UNIFORM_BLOCKS);
+        let uniform_buffer_offset_align = gl::get_integer_v(gl::UNIFORM_BUFFER_OFFSET_ALIGNMENT);
+
+        println!("UBO: size={} vs={} fs={} align={}", max_uniform_block_size,
+                                                      max_vertex_uniform_blocks,
+                                                      max_fragment_uniform_blocks,
+                                                      uniform_buffer_offset_align);
         Device {
             resource_path: resource_path,
             device_pixel_ratio: device_pixel_ratio,
@@ -1105,6 +1114,7 @@ impl Device {
                                height: u32,
                                internal_format: u32,
                                format: u32,
+                               data_type: gl::GLenum,
                                pixels: Option<&[u8]>) {
         gl::tex_image_2d(gl::TEXTURE_2D,
                          0,
@@ -1112,7 +1122,7 @@ impl Device {
                          width as gl::GLint, height as gl::GLint,
                          0,
                          format,
-                         gl::UNSIGNED_BYTE,
+                         data_type,
                          pixels);
     }
 
@@ -1121,8 +1131,9 @@ impl Device {
                             height: u32,
                             internal_format: u32,
                             format: u32,
+                            data_type: gl::GLenum,
                             pixels: Option<&[u8]>) {
-        self.upload_2d_texture_image(width, height, internal_format, format, pixels)
+        self.upload_2d_texture_image(width, height, internal_format, format, data_type, pixels)
     }
 
     fn deinit_texture_image(&mut self) {
@@ -1156,16 +1167,17 @@ impl Device {
             texture.mode = mode
         }
 
-        let (internal_format, gl_format) = match format {
-            ImageFormat::A8 => (GL_FORMAT_A, GL_FORMAT_A),
-            ImageFormat::RGB8 => (gl::RGB, gl::RGB),
+        let (internal_format, gl_format, data_type) = match format {
+            ImageFormat::A8 => (GL_FORMAT_A, GL_FORMAT_A, gl::UNSIGNED_BYTE),
+            ImageFormat::RGB8 => (gl::RGB, gl::RGB, gl::UNSIGNED_BYTE),
             ImageFormat::RGBA8 => {
                 if cfg!(target_os="android") {
-                    (GL_FORMAT_BGRA, GL_FORMAT_BGRA)
+                    (GL_FORMAT_BGRA, GL_FORMAT_BGRA, gl::UNSIGNED_BYTE)
                 } else {
-                    (gl::RGBA, GL_FORMAT_BGRA)
+                    (gl::RGBA, GL_FORMAT_BGRA, gl::UNSIGNED_BYTE)
                 }
             }
+            ImageFormat::RGBA32F => (gl::RGBA32F, gl::RGBA, gl::FLOAT),
             ImageFormat::Invalid => unreachable!(),
         };
 
@@ -1183,6 +1195,7 @@ impl Device {
                 self.upload_texture_image(width, height,
                                           internal_format,
                                           gl_format,
+                                          data_type,
                                           pixels);
             }
         }
@@ -1516,13 +1529,14 @@ impl Device {
                                    width: gl::GLint,
                                    height: gl::GLint,
                                    format: gl::GLuint,
+                                   data_type: gl::GLenum,
                                    data: &[u8]) {
         gl::tex_sub_image_2d(gl::TEXTURE_2D,
                              0,
                              x0, y0,
                              width, height,
                              format,
-                             gl::UNSIGNED_BYTE,
+                             data_type,
                              data);
     }
 
@@ -1535,10 +1549,11 @@ impl Device {
                           data: &[u8]) {
         debug_assert!(self.inside_frame);
 
-        let (gl_format, bpp) = match self.textures.get(&texture_id).unwrap().format {
-            ImageFormat::A8 => (GL_FORMAT_A, 1),
-            ImageFormat::RGB8 => (gl::RGB, 3),
-            ImageFormat::RGBA8 => (GL_FORMAT_BGRA, 4),
+        let (gl_format, bpp, data_type) = match self.textures.get(&texture_id).unwrap().format {
+            ImageFormat::A8 => (GL_FORMAT_A, 1, gl::UNSIGNED_BYTE),
+            ImageFormat::RGB8 => (gl::RGB, 3, gl::UNSIGNED_BYTE),
+            ImageFormat::RGBA8 => (GL_FORMAT_BGRA, 4, gl::UNSIGNED_BYTE),
+            ImageFormat::RGBA32F => (gl::RGBA, 16, gl::FLOAT),
             ImageFormat::Invalid => unreachable!(),
         };
 
@@ -1550,6 +1565,7 @@ impl Device {
                                          width as gl::GLint,
                                          height as gl::GLint,
                                          gl_format,
+                                         data_type,
                                          data);
     }
 

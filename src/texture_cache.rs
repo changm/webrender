@@ -783,6 +783,7 @@ impl TextureCache {
                 (&mut self.arena.pages_rgb8, RenderTargetMode::None)
             }
             (ImageFormat::Invalid, TextureCacheItemKind::Standard) |
+            (ImageFormat::RGBA32F, TextureCacheItemKind::Standard) |
             (_, TextureCacheItemKind::Alternate) => unreachable!(),
         };
 
@@ -1046,7 +1047,8 @@ impl TextureCache {
                             ImageFormat::A8 => 1,
                             ImageFormat::RGB8 => 3,
                             ImageFormat::RGBA8 => 4,
-                            ImageFormat::Invalid => unreachable!(),
+                            ImageFormat::Invalid |
+                            ImageFormat::RGBA32F => unreachable!(),
                         };
 
                         let mut top_row_bytes = Vec::new();
@@ -1231,6 +1233,7 @@ fn create_new_texture_page(pending_updates: &mut TextureUpdateList,
                            format: ImageFormat,
                            mode: RenderTargetMode) {
     let texture_id = free_texture_ids.pop().expect("TODO: Handle running out of texture IDs!");
+    println!("create_new_texture_page {:?} {:?} {:?} {:?}", texture_size, format, mode, texture_id);
     let update_op = TextureUpdate {
         id: texture_id,
         op: texture_create_op(texture_size, format, mode),

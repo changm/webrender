@@ -174,6 +174,7 @@ impl RenderBackend {
                             self.publish_frame(frame, &mut profile_counters);
                         }
                         ApiMsg::TranslatePointToLayerSpace(point, tx) => {
+                            /*
                             // TODO(pcwalton): Select other layers for mouse events.
                             let point = point / self.device_pixel_ratio;
                             match self.scene.root_pipeline_id {
@@ -188,7 +189,7 @@ impl RenderBackend {
                                 None => {
                                     tx.send(point).unwrap()
                                 }
-                            }
+                            }*/
                         }
                         ApiMsg::RequestWebGLContext(size, attributes, tx) => {
                             if let Some(ref handle) = self.webrender_context_handle {

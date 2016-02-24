@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/*
 use aabbtree::AABBTreeNode;
 use app_units::Au;
 use batch_builder;
@@ -160,6 +161,7 @@ impl BuildRequiredResources for AABBTreeNode {
         //let _pf = util::ProfileScope::new("  build_resource_list");
         let mut resource_list = ResourceList::new(resource_cache.device_pixel_ratio());
 
+        /*
         for group in &self.draw_list_group_segments {
             for draw_list_index_buffer in &group.index_buffers {
                 let draw_list = resource_cache.get_draw_list(draw_list_index_buffer.draw_list_id);
@@ -332,7 +334,7 @@ impl BuildRequiredResources for AABBTreeNode {
                     }
                 }
             }
-        }
+        }*/
 
         self.resource_list = Some(resource_list);
     }
@@ -363,3 +365,4 @@ fn add_border_radius_raster(outer_radius: &Size2D<f32>,
     }
 }
 
+*/

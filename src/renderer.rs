@@ -6,13 +6,13 @@ use batch::{RasterBatch, VertexBufferId};
 use debug_render::DebugRenderer;
 use device::{Device, ProgramId, TextureId, UniformLocation, VertexFormat, GpuProfile};
 use device::{TextureFilter, VAOId, VBOId, VertexUsageHint, FileWatcherHandler};
-use euclid::{Rect, Matrix4, Point2D, Size2D};
+use euclid::{Rect, Matrix4, Point2D, Size2D, Point4D};
 use fnv::FnvHasher;
 use gleam::gl;
 use internal_types::{RendererFrame, ResultMsg, TextureUpdateOp, BatchUpdateOp, BatchUpdateList};
 use internal_types::{TextureUpdateDetails, TextureUpdateList, PackedVertex, RenderTargetMode};
-use internal_types::{ORTHO_NEAR_PLANE, ORTHO_FAR_PLANE, DevicePixel};
-use internal_types::{PackedVertexForTextureCacheUpdate, CompositionOp, ChildLayerIndex};
+use internal_types::{ORTHO_NEAR_PLANE, ORTHO_FAR_PLANE, DevicePixel, PackedSceneVertex, PackedSceneItem};
+use internal_types::{PackedVertexForTextureCacheUpdate, CompositionOp, ChildLayerIndex, PackedTile};
 use internal_types::{AxisDirection, LowLevelFilterOp, DrawCommand, DrawLayer, ANGLE_FLOAT_TO_FIXED};
 use internal_types::{BasicRotationAngle};
 use ipc_channel::ipc;
@@ -24,6 +24,7 @@ use std::f32;
 use std::hash::BuildHasherDefault;
 use std::mem;
 use std::path::PathBuf;
+use std::slice;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
@@ -191,6 +192,10 @@ impl Renderer {
         let blur_program_id = device.create_program("blur");
         let mask_program_id = device.create_program("mask");
         let max_raster_op_size = MAX_RASTER_OP_SIZE * options.device_pixel_ratio as u32;
+
+        let rects_index = gl::get_uniform_block_index(mask_program_id.0, "RectangleBlock");
+        gl::uniform_block_binding(mask_program_id.0, rects_index, 1);
+        println!("rects_index = {}", rects_index);
 
         let texture_ids = device.create_texture_ids(1024);
         let mut texture_cache = TextureCache::new(texture_ids);
@@ -388,8 +393,8 @@ impl Renderer {
             self.device.begin_frame();
 
             gl::disable(gl::SCISSOR_TEST);
-            gl::clear_color(1.0, 1.0, 1.0, 0.0);
-            gl::clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT | gl::STENCIL_BUFFER_BIT);
+            //gl::clear_color(1.0, 1.0, 1.0, 0.0);
+            //gl::clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT | gl::STENCIL_BUFFER_BIT);
 
             self.update_shaders();
             self.update_texture_cache();
@@ -1126,6 +1131,7 @@ impl Renderer {
         }
     }
 
+/*
     fn draw_layer(&mut self,
                   layer: &DrawLayer,
                   render_context: &RenderContext) {
@@ -1643,6 +1649,7 @@ impl Renderer {
             }
         }
     }
+*/
 
     fn draw_frame(&mut self, framebuffer_size: Size2D<u32>) {
         if let Some(frame) = self.current_frame.take() {
@@ -1661,8 +1668,141 @@ impl Renderer {
             gl::depth_func(gl::LEQUAL);
             gl::enable(gl::SCISSOR_TEST);
 
-            self.draw_layer(&frame.root_layer,
-                            &render_context);
+            // hack hack hack hack!
+            gl::enable(gl::BLEND);
+            gl::blend_func(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            gl::blend_equation(gl::FUNC_ADD);
+
+            let projection = Matrix4::ortho(0.0,
+                                            framebuffer_size.width as f32,
+                                            framebuffer_size.height as f32,
+                                            0.0,
+                                            ORTHO_NEAR_PLANE,
+                                            ORTHO_FAR_PLANE);
+
+            //println!("-- draw_frame --");
+
+            for tile in &frame.tiles {
+                self.debug.add_line(tile.origin.x as f32,
+                                    tile.origin.y as f32,
+                                    &ColorF::new(1.0, 1.0, 1.0, 1.0),
+                                    (tile.origin.x + frame.tile_size.width) as f32,
+                                    tile.origin.y as f32,
+                                    &ColorF::new(1.0, 1.0, 1.0, 1.0));
+
+                self.debug.add_line(tile.origin.x as f32,
+                                    (tile.origin.y + frame.tile_size.height) as f32,
+                                    &ColorF::new(1.0, 1.0, 1.0, 1.0),
+                                    (tile.origin.x + frame.tile_size.width) as f32,
+                                    (tile.origin.y + frame.tile_size.height) as f32,
+                                    &ColorF::new(1.0, 1.0, 1.0, 1.0));
+
+                self.debug.add_line(tile.origin.x as f32,
+                                    tile.origin.y as f32,
+                                    &ColorF::new(1.0, 1.0, 1.0, 1.0),
+                                    tile.origin.x as f32,
+                                    (tile.origin.y + frame.tile_size.height) as f32,
+                                    &ColorF::new(1.0, 1.0, 1.0, 1.0));
+
+                self.debug.add_line((tile.origin.x + frame.tile_size.width) as f32,
+                                    tile.origin.y as f32,
+                                    &ColorF::new(1.0, 1.0, 1.0, 1.0),
+                                    (tile.origin.x + frame.tile_size.width) as f32,
+                                    (tile.origin.y + frame.tile_size.height) as f32,
+                                    &ColorF::new(1.0, 1.0, 1.0, 1.0));
+
+                if tile.packed_tiles.len() == 0 {
+                    continue;
+                }
+
+/*
+                let tint = (tile.packed_tiles[0].rect_count[0] / 10.0).min(1.0);
+                self.debug.add_quad(tile.origin.x as f32,
+                                    tile.origin.y as f32,
+                                    (tile.origin.x + frame.tile_size.width) as f32,
+                                    (tile.origin.y + frame.tile_size.height) as f32,
+                                    &ColorF::new(tint, 0.0, 0.0, 0.5),
+                                    &ColorF::new(tint, 0.0, 0.0, 0.5));
+*/
+
+                debug_assert!(tile.packed_tiles.len() == 1);
+                let packed_tile = &tile.packed_tiles[0];
+
+                self.debug.add_text((tile.origin.x + frame.tile_size.width / 2) as f32,
+                                    (tile.origin.y + frame.tile_size.height / 2) as f32,
+                                    &format!("{:?}", packed_tile.rect_count[0]),
+                                    &ColorF::new(1.0, 1.0, 0.0, 1.0));
+
+                let ubos = gl::gen_buffers(1);
+                let ubo = ubos[0];
+                gl::bind_buffer(gl::UNIFORM_BUFFER, ubo);
+
+/*
+                if packed_tile.rect_count[0] > 1.0 {
+                    println!("{:?}", packed_tile.rect_count);
+                    for i in 0..packed_tile.rect_count[0] as usize {
+                        println!("  {:?}", packed_tile.items[i]);
+                    }
+                }
+*/
+
+                gl::buffer_data_raw(gl::UNIFORM_BUFFER, packed_tile, gl::STREAM_DRAW);
+                gl::bind_buffer(gl::UNIFORM_BUFFER, 0);
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, 1, ubo);
+
+                let (mut indices, mut vertices) = (vec![], vec![]);
+                indices.push(0);
+                indices.push(1);
+                indices.push(2);
+                indices.push(2);
+                indices.push(3);
+                indices.push(1);
+
+                let color = ColorF::new(0.0, 0.5, 0.0, 0.0);
+
+                let x0 = tile.origin.x as f32;
+                let y0 = tile.origin.y as f32;
+                let x1 = x0 + frame.tile_size.width as f32;
+                let y1 = y0 + frame.tile_size.height as f32;
+
+                vertices.extend_from_slice(&[
+                    PackedVertex::from_components(
+                        x0, y0,
+                        &color,
+                        0.0, 0.0,
+                        0.0, 0.0),
+                    PackedVertex::from_components(
+                        x1, y0,
+                        &color,
+                        1.0, 0.0,
+                        1.0, 0.0),
+                    PackedVertex::from_components(
+                        x0, y1,
+                        &color,
+                        0.0, 1.0,
+                        0.0, 1.0),
+                    PackedVertex::from_components(
+                        x1, y1,
+                        &color,
+                        1.0, 1.0,
+                        1.0, 1.0),
+                ]);
+
+                self.device.bind_program(self.mask_program_id, &projection);
+                self.device.bind_mask_texture(TextureId(1024));
+
+                draw_simple_triangles(&mut self.simple_triangles_vao,
+                                      &mut self.device,
+                                      &mut self.profile_counters,
+                                      &indices[..],
+                                      &vertices[..],
+                                      TextureId(0));
+
+                gl::delete_buffers(&ubos);
+            }
+
+            //self.draw_layer(&frame.root_layer,
+            //                &render_context);
 
             // Restore frame - avoid borrow checker!
             self.current_frame = Some(frame);

@@ -25,6 +25,7 @@ mod resource_cache;
 mod resource_list;
 mod scene;
 mod spring;
+mod spatial_hash;
 mod tessellator;
 mod texture_cache;
 mod util;
