@@ -2,12 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use spring::{DAMPING, STIFFNESS, Spring};
+use euclid::{Point2D, Rect, Size2D, Matrix4};
+
 /*
 use aabbtree::{AABBTree, NodeIndex};
-use euclid::{Point2D, Rect, Size2D, Matrix4};
 use internal_types::{BatchUpdate, BatchUpdateList, BatchUpdateOp, DisplayItemId};
 use internal_types::{DrawListItemIndex, DrawListId, DrawListGroupId};
-use spring::{DAMPING, STIFFNESS, Spring};
 use webrender_traits::ScrollLayerId;
 
 pub struct Layer {
@@ -120,6 +121,7 @@ impl Layer {
         self.scrolling.offset = self.scrolling.spring.current();
     }
 }
+*/
 
 #[derive(Copy, Clone)]
 pub struct ScrollingState {
@@ -137,5 +139,3 @@ impl ScrollingState {
         }
     }
 }
-
-*/

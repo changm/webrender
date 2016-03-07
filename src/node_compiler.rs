@@ -161,7 +161,6 @@ impl NodeCompiler for AABBTreeNode {
 
         compiled_node.vertex_buffer = Some(vertex_buffer);
         self.compiled_node = Some(compiled_node);
-        */
     }
 }
-*/
+        */

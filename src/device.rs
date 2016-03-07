@@ -1185,7 +1185,7 @@ impl Device {
             RenderTargetMode::RenderTarget => {
                 self.bind_color_texture(texture_id);
                 self.set_texture_parameters(filter);
-                self.upload_2d_texture_image(width, height, internal_format, gl_format, None);
+                self.upload_2d_texture_image(width, height, internal_format, gl_format, data_type, None);
                 self.create_fbo_for_texture_if_necessary(texture_id);
             }
             RenderTargetMode::None => {

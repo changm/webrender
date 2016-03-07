@@ -14,10 +14,10 @@ use internal_types::{CompositeBatchInfo, CompositeBatchJob, MaskRegion, PackedSc
 use internal_types::{RendererFrame, StackingContextInfo, BatchInfo, DrawCall, StackingContextIndex};
 use internal_types::{ANGLE_FLOAT_TO_FIXED, MAX_RECT, BatchUpdate, BatchUpdateOp, DrawLayer};
 use internal_types::{DrawCommand, ClearInfo, RenderTargetId, DrawListGroupId};
-use layer::{Layer, ScrollingState};
-use node_compiler::NodeCompiler;
-use internal_types::{ANGLE_FLOAT_TO_FIXED, MAX_RECT, BatchUpdate, BatchUpdateOp, DrawLayer, Glyph};
-use internal_types::{DrawCommand, ClearInfo, RenderTargetId, DrawListGroupId, DisplayItemId, BasicRotationAngle};
+use layer::{ScrollingState};
+//use node_compiler::NodeCompiler;
+//use internal_types::{ANGLE_FLOAT_TO_FIXED, MAX_RECT, BatchUpdate, BatchUpdateOp, DrawLayer, Glyph};
+use internal_types::{DisplayItemId, BasicRotationAngle};
 //use layer::Layer;
 //use node_compiler::NodeCompiler;
 use renderer::CompositionOpHelpers;
@@ -40,8 +40,8 @@ const CAN_OVERSCROLL: bool = true;
 #[cfg(not(target_os = "macos"))]
 const CAN_OVERSCROLL: bool = false;
 
-use webrender_traits::{PipelineId, Epoch, ScrollPolicy, ScrollLayerId, StackingContext};
-use webrender_traits::{FilterOp, ImageFormat, MixBlendMode, StackingLevel};
+//use webrender_traits::{PipelineId, Epoch, ScrollPolicy, ScrollLayerId, StackingContext};
+//use webrender_traits::{FilterOp, ImageFormat, MixBlendMode, StackingLevel};
 use webrender_traits::{SpecificDisplayItem, ColorF};
 use renderer::BLUR_INFLATION_FACTOR;
 //use resource_list::ResourceList;
@@ -628,8 +628,8 @@ impl Frame {
 
         // Free any render targets from last frame.
         // TODO: This should really re-use existing targets here...
-        /*
         let mut old_layer_scrolling_states = HashMap::with_hasher(Default::default());
+        /*
         for (layer_id, mut old_layer) in &mut self.layers.drain() {
             old_layer.reset(&mut self.pending_updates);
             old_layer_scrolling_states.insert(layer_id, old_layer.scrolling);
@@ -814,9 +814,9 @@ impl Frame {
 */
 
                 // Insert global position: fixed elements layer
+                let root_fixed_layer_id = ScrollLayerId::create_fixed(root_pipeline_id);
 /*
                 debug_assert!(self.layers.is_empty());
-                let root_fixed_layer_id = ScrollLayerId::create_fixed(root_pipeline_id);
                 self.layers.insert(root_fixed_layer_id,
                                    Layer::new(root_stacking_context.stacking_context.overflow.origin,
                                               root_stacking_context.stacking_context.overflow.size,
@@ -936,10 +936,10 @@ impl Frame {
                                 let color = ColorF::new(1.0, 1.0, 1.0, 1.0);
 
                                 let vertices = [
-                                    PackedSceneVertex::new(&v_tl, &color, &image_info.uv_rect.top_left),
-                                    PackedSceneVertex::new(&v_bl, &color, &image_info.uv_rect.bottom_left),
-                                    PackedSceneVertex::new(&v_br, &color, &image_info.uv_rect.bottom_right),
-                                    PackedSceneVertex::new(&v_tr, &color, &image_info.uv_rect.top_right),
+                                    PackedSceneVertex::new(&v_tl, &color, &image_info.uv_rect().top_left),
+                                    PackedSceneVertex::new(&v_bl, &color, &image_info.uv_rect().bottom_left),
+                                    PackedSceneVertex::new(&v_br, &color, &image_info.uv_rect().bottom_right),
+                                    PackedSceneVertex::new(&v_tr, &color, &image_info.uv_rect().top_right),
                                 ];
 
                                 context.spatial_hash.add_color_rectangle(&rect,
@@ -950,6 +950,8 @@ impl Frame {
                                                                          &Point2D::zero());
                             }
                             SpecificDisplayItem::Text(ref text_info) => {
+                                panic!("todo");
+                                /*
                                 let mut glyph_key = GlyphKey::new(text_info.font_key,
                                                                   text_info.size,
                                                                   text_info.blur_radius,
@@ -1000,17 +1002,17 @@ impl Frame {
                                                                                  &Size2D::zero(),
                                                                                  &Point2D::zero());
                                     }
-                                }
+                                }*/
                             }
                             SpecificDisplayItem::Rectangle(ref rect_info) => {
                                 //println!("Rectangle {:?}", rect_info);
                                 let image_info = context.resource_cache.get_dummy_color_image();
 
                                 let vertices = [
-                                    PackedSceneVertex::new(&v_tl, &rect_info.color, &image_info.uv_rect.top_left),
-                                    PackedSceneVertex::new(&v_bl, &rect_info.color, &image_info.uv_rect.bottom_left),
-                                    PackedSceneVertex::new(&v_br, &rect_info.color, &image_info.uv_rect.bottom_right),
-                                    PackedSceneVertex::new(&v_tr, &rect_info.color, &image_info.uv_rect.top_right),
+                                    PackedSceneVertex::new(&v_tl, &rect_info.color, &image_info.uv_rect().top_left),
+                                    PackedSceneVertex::new(&v_bl, &rect_info.color, &image_info.uv_rect().bottom_left),
+                                    PackedSceneVertex::new(&v_br, &rect_info.color, &image_info.uv_rect().bottom_right),
+                                    PackedSceneVertex::new(&v_tr, &rect_info.color, &image_info.uv_rect().top_right),
                                 ];
 
                                 context.spatial_hash.add_color_rectangle(&rect,
@@ -1603,7 +1605,10 @@ impl Frame {
             }
         };
 
+        let layers_bouncing_back = HashSet::with_hasher(Default::default());
+
         RendererFrame::new(self.pipeline_epoch_map.clone(),
+                           layers_bouncing_back,
                            tiles,
                            tile_size,
                            //packed_scene,

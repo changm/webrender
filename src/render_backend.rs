@@ -166,12 +166,13 @@ impl RenderBackend {
                             self.publish_frame(frame, &mut profile_counters);
                         }
                         ApiMsg::TickScrollingBounce => {
-                            let frame = profile_counters.total_time.profile(|| {
+                            /*let frame = profile_counters.total_time.profile(|| {
                                 self.frame.tick_scrolling_bounce_animations();
                                 self.render()
                             });
 
                             self.publish_frame(frame, &mut profile_counters);
+                            */
                         }
                         ApiMsg::TranslatePointToLayerSpace(point, tx) => {
                             /*
