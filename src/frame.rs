@@ -1035,6 +1035,17 @@ impl Frame {
                                 let top = &border_info.top;
                                 let bottom = &border_info.bottom;
 
+                                // TODO(gw): This assumes the params are the same as the moire demo
+                                //           just for profiling the best case on GPU. In a real scene
+                                //           we need to detect these fast paths and select and appropriate
+                                //           tile shader based on that!
+
+                                context.spatial_hash.add_circle(&Point2D::new(rect.origin.x + radius.top_left.width,
+                                                                              rect.origin.y + radius.top_left.height),
+                                                                &left.color,
+                                                                radius.top_left.width);
+
+                                /*
                                 //println!("r = {:?} {:?} {:?}", rect, radius, left);
 
                                 let tl_outer = Point2D::new(rect.origin.x, rect.origin.y);
@@ -1124,7 +1135,7 @@ impl Frame {
                                                                              &radius.top_right,
                                                                              &border_info.top_right_inner_radius(),
                                                                              &tr_inner);
-                                }
+                                }*/
                             }
                         }
                     }

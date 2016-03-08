@@ -144,6 +144,13 @@ impl SpatialHash {
         }
     }
 
+    pub fn add_circle(&mut self,
+                      center: &Point2D<f32>,
+                      color: &ColorF,
+                      radius: f32) {
+        println!("add_circle {:?} {:?} {:?}", center, color, radius);
+    }
+
     pub fn add_color_rectangle(&mut self,
                                rect: &Rect<f32>,
                                color: &ColorF,
