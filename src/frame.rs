@@ -1047,7 +1047,8 @@ impl Frame {
                                 context.spatial_hash.add_circle(&Point2D::new(rect.origin.x + radius.top_left.width,
                                                                               rect.origin.y + radius.top_left.height),
                                                                 &left.color,
-                                                                radius.top_left.width);
+                                                                radius.top_left.width,
+                                                                radius.top_left.width - radius.top_left.width);
 
                                 /*
                                 //println!("r = {:?} {:?} {:?}", rect, radius, left);

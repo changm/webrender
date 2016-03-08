@@ -7,6 +7,14 @@ use internal_types::{PackedTile, RenderTile};
 use std::{cmp, mem};
 use webrender_traits::{ColorF};
 //use internal_types::{PackedSceneItem, PackedSceneVertex};
+use internal_types::{PackedCircle};
+
+struct CirclePrimitive {
+    center: Point2D<f32>,
+    outer_radius: f32,
+    inner_radius: f32,
+    color: ColorF,
+}
 
 struct RectanglePrimitive {
     positions: [Point4D<f32>; 4],
@@ -18,6 +26,7 @@ struct RectanglePrimitive {
 
 enum Primitive {
     Rectangle(RectanglePrimitive),
+    Circle(CirclePrimitive),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -147,8 +156,45 @@ impl SpatialHash {
     pub fn add_circle(&mut self,
                       center: &Point2D<f32>,
                       color: &ColorF,
-                      radius: f32) {
-        println!("add_circle {:?} {:?} {:?}", center, color, radius);
+                      outer_radius: f32,
+                      inner_radius: f32) {
+        let primitive = Primitive::Circle(CirclePrimitive {
+            center: *center,
+            outer_radius: outer_radius,
+            inner_radius: inner_radius,
+            color: *color,
+        });
+
+        let item_key = ItemKey(self.primitives.len() as u32);
+
+        let screen_min_x = (center.x - outer_radius).floor() as i32;
+        let screen_min_y = (center.y - outer_radius).floor() as i32;
+        let screen_max_x = (center.x + outer_radius).ceil() as i32;
+        let screen_max_y = (center.y + outer_radius).ceil() as i32;
+
+        let tile_x0 = screen_min_x / self.tile_size.width;
+        let tile_y0 = screen_min_y / self.tile_size.height;
+        let tile_x1 = (screen_max_x + self.tile_size.width - 1) / self.tile_size.width;
+        let tile_y1 = (screen_max_y + self.tile_size.height - 1) / self.tile_size.height;
+
+        let tile_x0 = cmp::min(tile_x0, self.x_tile_count);
+        let tile_x0 = cmp::max(tile_x0, 0);
+        let tile_x1 = cmp::min(tile_x1, self.x_tile_count);
+        let tile_x1 = cmp::max(tile_x1, 0);
+
+        let tile_y0 = cmp::min(tile_y0, self.y_tile_count);
+        let tile_y0 = cmp::max(tile_y0, 0);
+        let tile_y1 = cmp::min(tile_y1, self.y_tile_count);
+        let tile_y1 = cmp::max(tile_y1, 0);
+
+        self.primitives.push(primitive);
+
+        for y in tile_y0..tile_y1 {
+            for x in tile_x0..tile_x1 {
+                let bucket = &mut self.buckets[(y * self.x_tile_count + x) as usize];
+                bucket.items.push(item_key);
+            }
+        }
     }
 
     pub fn add_color_rectangle(&mut self,
@@ -158,6 +204,7 @@ impl SpatialHash {
                                outer_border_radius: &Size2D<f32>,
                                inner_border_radius: &Size2D<f32>,
                                ref_point: &Point2D<f32>) {
+        /*
         let xf_rect = transform_rect(rect, transform);
 
         let primitive = Primitive::Rectangle(RectanglePrimitive {
@@ -207,7 +254,7 @@ impl SpatialHash {
 
                 bucket.items.push(item_key);
             }
-        }
+        }*/
     }
 
     pub fn build(&self) -> Vec<RenderTile> {
@@ -217,7 +264,40 @@ impl SpatialHash {
             let mut packed_tiles = Vec::new();
 
             if bucket.items.len() > 0 {
-                panic!("todo");
+                let mut circles: [PackedCircle; 256] = unsafe { mem::zeroed() };
+
+                for (index, item_key) in bucket.items.iter().enumerate() {
+                    let prim = &self.primitives[item_key.0 as usize];
+
+                    match prim {
+                        &Primitive::Rectangle(ref rect) => {
+                            panic!("todo");
+                        }
+                        &Primitive::Circle(ref circle) => {
+                            let packed_circle = PackedCircle {
+                                color: [
+                                    circle.color.r,
+                                    circle.color.g,
+                                    circle.color.b,
+                                    circle.color.a
+                                ],
+                                center_outer_inner_radius: [
+                                    circle.center.x,
+                                    circle.center.y,
+                                    circle.outer_radius,
+                                    circle.inner_radius,
+                                ],
+                            };
+                            circles[index] = packed_circle;
+                        }
+                    }
+                }
+
+                packed_tiles.push(PackedTile {
+                    circles: circles,
+                    circle_count: [bucket.items.len() as f32, 0.0, 0.0, 0.0]
+                });
+
                 /*
                 let mut items: [PackedSceneItem; 256] = unsafe { mem::zeroed() };
 
