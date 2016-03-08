@@ -606,7 +606,7 @@ impl PackedSceneVertex {
 }
 */
 
-#[derive(Clone)]    // TODO(gw): Remove me!
+#[derive(Clone, Debug)]    // TODO(gw): Remove me!
 pub struct PackedCircle {
     pub center_outer_inner_radius: [f32; 4],
     pub color: [f32; 4],

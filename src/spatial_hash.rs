@@ -83,6 +83,40 @@ impl DebugInfo {
     }
 }
 
+fn circle_contains_rect(circle_center: &Point2D<f32>,
+                        radius: f32,
+                        rect: &Rect<f32>) -> bool {
+    let dx = (circle_center.x - rect.origin.x).max(rect.origin.x + rect.size.width - circle_center.x);
+    let dy = (circle_center.y - rect.origin.y).max(rect.origin.y + rect.size.height - circle_center.y);
+    radius * radius >= dx * dx + dy * dy
+}
+
+fn rect_intersects_circle(circle_center: &Point2D<f32>,
+                          radius: f32,
+                          rect: &Rect<f32>) -> bool {
+    let circle_distance_x = (circle_center.x - (rect.origin.x + rect.size.width * 0.5)).abs();
+    let circle_distance_y = (circle_center.y - (rect.origin.y + rect.size.height * 0.5)).abs();
+
+    if circle_distance_x > rect.size.width * 0.5 + radius {
+        return false
+    }
+    if circle_distance_y > rect.size.height * 0.5 + radius {
+        return false
+    }
+
+    if circle_distance_x <= rect.size.width * 0.5 {
+        return true;
+    }
+    if circle_distance_y <= rect.size.height * 0.5 {
+        return true;
+    }
+
+    let corner_distance_sq = (circle_distance_x - rect.size.width * 0.5) * (circle_distance_x - rect.size.width * 0.5) +
+                             (circle_distance_y - rect.size.height * 0.5) * (circle_distance_y - rect.size.height * 0.5);
+
+    corner_distance_sq <= radius * radius
+}
+
 fn transform_rect(rect: &Rect<f32>,
                   transform: &Matrix4) -> TransformedRect {
     let vertices = [
@@ -192,7 +226,14 @@ impl SpatialHash {
         for y in tile_y0..tile_y1 {
             for x in tile_x0..tile_x1 {
                 let bucket = &mut self.buckets[(y * self.x_tile_count + x) as usize];
-                bucket.items.push(item_key);
+                let tile_rect = Rect::new(Point2D::new(bucket.position.x as f32,
+                                                       bucket.position.y as f32),
+                                          Size2D::new(self.tile_size.width as f32,
+                                                      self.tile_size.height as f32));
+                if !circle_contains_rect(center, inner_radius, &tile_rect) &&
+                    rect_intersects_circle(center, outer_radius, &tile_rect) {
+                    bucket.items.push(item_key);
+                }
             }
         }
     }

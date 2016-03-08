@@ -194,9 +194,14 @@ impl Renderer {
         let mask_program_id = device.create_program("mask");
         let max_raster_op_size = MAX_RASTER_OP_SIZE * options.device_pixel_ratio as u32;
 
+/*
         let rects_index = gl::get_uniform_block_index(mask_program_id.0, "RectangleBlock");
         gl::uniform_block_binding(mask_program_id.0, rects_index, 1);
         println!("rects_index = {}", rects_index);
+*/
+        let circles_index = gl::get_uniform_block_index(mask_program_id.0, "CircleBlock");
+        gl::uniform_block_binding(mask_program_id.0, circles_index, 1);
+        println!("circles_index = {}", circles_index);
 
         let texture_ids = device.create_texture_ids(1024);
         let mut texture_cache = TextureCache::new(texture_ids);
@@ -394,8 +399,8 @@ impl Renderer {
             self.device.begin_frame();
 
             gl::disable(gl::SCISSOR_TEST);
-            //gl::clear_color(1.0, 1.0, 1.0, 0.0);
-            //gl::clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT | gl::STENCIL_BUFFER_BIT);
+            gl::clear_color(0.4, 0.4, 0.4, 0.0);
+            gl::clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT | gl::STENCIL_BUFFER_BIT);
 
             self.update_shaders();
             self.update_texture_cache();
@@ -1739,13 +1744,10 @@ impl Renderer {
                 gl::bind_buffer(gl::UNIFORM_BUFFER, ubo);
 
 /*
-                if packed_tile.rect_count[0] > 1.0 {
-                    println!("{:?}", packed_tile.rect_count);
-                    for i in 0..packed_tile.rect_count[0] as usize {
-                        println!("  {:?}", packed_tile.items[i]);
-                    }
-                }
-*/
+                println!("{:?}", packed_tile.circle_count);
+                for i in 0..packed_tile.circle_count[0] as usize {
+                    println!("  {:?}", packed_tile.circles[i]);
+                }*/
 
                 gl::buffer_data_raw(gl::UNIFORM_BUFFER, packed_tile, gl::STREAM_DRAW);
                 gl::bind_buffer(gl::UNIFORM_BUFFER, 0);

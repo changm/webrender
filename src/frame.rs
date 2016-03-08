@@ -1048,7 +1048,7 @@ impl Frame {
                                                                               rect.origin.y + radius.top_left.height),
                                                                 &left.color,
                                                                 radius.top_left.width,
-                                                                radius.top_left.width - radius.top_left.width);
+                                                                border_info.top_left_inner_radius().width);
 
                                 /*
                                 //println!("r = {:?} {:?} {:?}", rect, radius, left);
