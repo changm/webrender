@@ -10,7 +10,7 @@ use fnv::FnvHasher;
 use geometry::ray_intersects_rect;
 use internal_types::{AxisDirection, LowLevelFilterOp, CompositionOp, DrawListItemIndex};
 use internal_types::{BatchUpdateList, ChildLayerIndex, DrawListId, RenderTile, GlyphKey};
-use internal_types::{CompositeBatchInfo, CompositeBatchJob, MaskRegion, PackedSceneVertex};
+use internal_types::{CompositeBatchInfo, CompositeBatchJob, MaskRegion};//, PackedSceneVertex};
 use internal_types::{RendererFrame, StackingContextInfo, BatchInfo, DrawCall, StackingContextIndex};
 use internal_types::{ANGLE_FLOAT_TO_FIXED, MAX_RECT, BatchUpdate, BatchUpdateOp, DrawLayer};
 use internal_types::{DrawCommand, ClearInfo, RenderTargetId, DrawListGroupId};
@@ -935,12 +935,14 @@ impl Frame {
 
                                 let color = ColorF::new(1.0, 1.0, 1.0, 1.0);
 
+/*
                                 let vertices = [
                                     PackedSceneVertex::new(&v_tl, &color, &image_info.uv_rect().top_left),
                                     PackedSceneVertex::new(&v_bl, &color, &image_info.uv_rect().bottom_left),
                                     PackedSceneVertex::new(&v_br, &color, &image_info.uv_rect().bottom_right),
                                     PackedSceneVertex::new(&v_tr, &color, &image_info.uv_rect().top_right),
                                 ];
+*/
 
                                 context.spatial_hash.add_color_rectangle(&rect,
                                                                          &color,
@@ -1008,12 +1010,14 @@ impl Frame {
                                 //println!("Rectangle {:?}", rect_info);
                                 let image_info = context.resource_cache.get_dummy_color_image();
 
+/*
                                 let vertices = [
                                     PackedSceneVertex::new(&v_tl, &rect_info.color, &image_info.uv_rect().top_left),
                                     PackedSceneVertex::new(&v_bl, &rect_info.color, &image_info.uv_rect().bottom_left),
                                     PackedSceneVertex::new(&v_br, &rect_info.color, &image_info.uv_rect().bottom_right),
                                     PackedSceneVertex::new(&v_tr, &rect_info.color, &image_info.uv_rect().top_right),
                                 ];
+*/
 
                                 context.spatial_hash.add_color_rectangle(&rect,
                                                                          &rect_info.color,

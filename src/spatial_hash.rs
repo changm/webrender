@@ -6,7 +6,7 @@ use euclid::{Rect, Size2D, Point2D, Matrix4, Point4D};
 use internal_types::{PackedTile, RenderTile};
 use std::{cmp, mem};
 use webrender_traits::{ColorF};
-use internal_types::{PackedSceneItem, PackedSceneVertex};
+//use internal_types::{PackedSceneItem, PackedSceneVertex};
 
 struct RectanglePrimitive {
     positions: [Point4D<f32>; 4],
@@ -217,6 +217,8 @@ impl SpatialHash {
             let mut packed_tiles = Vec::new();
 
             if bucket.items.len() > 0 {
+                panic!("todo");
+                /*
                 let mut items: [PackedSceneItem; 256] = unsafe { mem::zeroed() };
 
                 for (index, item_key) in bucket.items.iter().enumerate() {
@@ -253,6 +255,7 @@ impl SpatialHash {
                     items: items,
                     rect_count: [bucket.items.len() as f32, 0.0, 0.0, 0.0]
                 });
+                */
             }
 
             tiles.push(RenderTile {

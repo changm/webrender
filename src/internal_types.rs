@@ -558,6 +558,7 @@ impl DrawLayer {
     }
 }
 
+/*
 // TODO(gw): Store this as a plane representation - this would give non-axis aligned clipping for "free".
 //           Could masks be calculated and stored per tile?
 //           Use a first pass to send all rectangles to VS and rasterize the PackedSceneItem below as screen space coords / planes
@@ -603,17 +604,27 @@ impl PackedSceneVertex {
         }
     }
 }
+*/
 
+#[derive(Clone)]    // TODO(gw): Remove me!
+pub struct PackedCircle {
+    pub center_outer_inner_radius: [f32; 4],
+    pub color: [f32; 4],
+}
+
+/*
 #[derive(Clone)]    // TODO(gw): Remove me!
 pub struct PackedSceneItem {
     pub vertices: [PackedSceneVertex; 4],
     pub radius: [f32; 4],
     pub ref_point: [f32; 4],
-}
+}*/
 
 pub struct PackedTile {
-    pub items: [PackedSceneItem; 256],
-    pub rect_count: [f32; 4],
+    //pub items: [PackedSceneItem; 256],
+    //pub rect_count: [f32; 4],
+    pub circles: [PackedCircle; 256],
+    pub circle_count: [f32; 4],
 }
 
 #[derive(Debug, Clone, Copy)]

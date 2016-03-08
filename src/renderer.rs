@@ -11,7 +11,8 @@ use fnv::FnvHasher;
 use gleam::gl;
 use internal_types::{RendererFrame, ResultMsg, TextureUpdateOp, BatchUpdateOp, BatchUpdateList};
 use internal_types::{TextureUpdateDetails, TextureUpdateList, PackedVertex, RenderTargetMode};
-use internal_types::{ORTHO_NEAR_PLANE, ORTHO_FAR_PLANE, DevicePixel, PackedSceneVertex, PackedSceneItem};
+use internal_types::{ORTHO_NEAR_PLANE, ORTHO_FAR_PLANE, DevicePixel};
+// use internal_types::{PackedSceneVertex, PackedSceneItem};
 use internal_types::{PackedVertexForTextureCacheUpdate, CompositionOp, ChildLayerIndex, PackedTile};
 use internal_types::{AxisDirection, LowLevelFilterOp, DrawCommand, DrawLayer, ANGLE_FLOAT_TO_FIXED};
 use internal_types::{BasicRotationAngle};
@@ -1730,7 +1731,7 @@ impl Renderer {
 
                 self.debug.add_text((tile.origin.x + frame.tile_size.width / 2) as f32,
                                     (tile.origin.y + frame.tile_size.height / 2) as f32,
-                                    &format!("{:?}", packed_tile.rect_count[0]),
+                                    &format!("{:?}", packed_tile.circle_count[0]),
                                     &ColorF::new(1.0, 1.0, 0.0, 1.0));
 
                 let ubos = gl::gen_buffers(1);
