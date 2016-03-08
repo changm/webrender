@@ -1689,6 +1689,7 @@ impl Renderer {
             //println!("-- draw_frame --");
 
             for tile in &frame.tiles {
+                /*
                 self.debug.add_line(tile.origin.x as f32,
                                     tile.origin.y as f32,
                                     &ColorF::new(1.0, 1.0, 1.0, 1.0),
@@ -1716,6 +1717,7 @@ impl Renderer {
                                     (tile.origin.x + frame.tile_size.width) as f32,
                                     (tile.origin.y + frame.tile_size.height) as f32,
                                     &ColorF::new(1.0, 1.0, 1.0, 1.0));
+*/
 
                 if tile.packed_tiles.len() == 0 {
                     continue;
@@ -1734,10 +1736,12 @@ impl Renderer {
                 debug_assert!(tile.packed_tiles.len() == 1);
                 let packed_tile = &tile.packed_tiles[0];
 
+/*
                 self.debug.add_text((tile.origin.x + frame.tile_size.width / 2) as f32,
                                     (tile.origin.y + frame.tile_size.height / 2) as f32,
                                     &format!("{:?}", packed_tile.circle_count[0]),
                                     &ColorF::new(1.0, 1.0, 0.0, 1.0));
+*/
 
                 let ubos = gl::gen_buffers(1);
                 let ubo = ubos[0];

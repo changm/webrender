@@ -33,6 +33,7 @@ use util;
 use webrender_traits::{AuxiliaryLists, PipelineId, Epoch, ScrollPolicy, ScrollLayerId};
 use webrender_traits::{StackingContext, FilterOp, ImageFormat, MixBlendMode, StackingLevel};
 use webrender_traits::{ScrollEventPhase, ScrollLayerInfo};
+use std::env;
 
 #[cfg(target_os = "macos")]
 const CAN_OVERSCROLL: bool = true;
@@ -826,6 +827,8 @@ impl Frame {
 
                 // Work around borrow check on resource cache
                 {
+                    let ws = Size2D::new(1600, 1200);
+
                     let mut context = FlattenContext {
                         resource_cache: resource_cache,
                         scene: scene,
@@ -833,7 +836,7 @@ impl Frame {
                         current_draw_list_group: None,
                         device_pixel_ratio: device_pixel_ratio,
                         //packed_scene: PackedScene::new(),
-                        spatial_hash: SpatialHash::new(Size2D::new(800, 600), Size2D::new(80, 60)),
+                        spatial_hash: SpatialHash::new(ws, Size2D::new(80, 40)),
                     };
 
                     let parent_info = FlattenInfo {
