@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/*
 use aabbtree::AABBTreeNode;
 use batch::{BatchBuilder, VertexBuffer};
 use fnv::FnvHasher;
@@ -163,3 +164,4 @@ impl NodeCompiler for AABBTreeNode {
         self.compiled_node = Some(compiled_node);
     }
 }
+*/

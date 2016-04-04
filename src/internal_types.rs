@@ -16,6 +16,8 @@ use std::ops::{Add, Sub};
 use std::path::PathBuf;
 use std::sync::Arc;
 use texture_cache::BorderType;
+//use tile_buffer::TileBuffer;
+use tiling::TileFrame;
 use util::{self, RectVaryings};
 use webrender_traits::{FontKey, Epoch, ColorF, PipelineId};
 use webrender_traits::{ImageFormat, MixBlendMode, NativeFontHandle, DisplayItem, ScrollLayerId};
@@ -251,19 +253,20 @@ impl PackedVertexForQuad {
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct PackedVertex {
-    pub x: f32,
-    pub y: f32,
-    pub color: PackedColor,
-    pub u: f32,
-    pub v: f32,
-    pub mu: u16,
-    pub mv: u16,
-    pub matrix_index: u8,
-    pub clip_in_rect_index: u8,
-    pub clip_out_rect_index: u8,
-    pub tile_params_index: u8,
+    pub pos: [f32; 2],
+    pub rect: [f32; 4],
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct FontVertex {
+    pub x: f32,
+    pub y: f32,
+    pub s: f32,
+    pub t: f32,
+}
+
+/*
 impl PackedVertex {
     pub fn from_components(x: f32,
                            y: f32,
@@ -310,7 +313,7 @@ impl PackedVertex {
             tile_params_index: 0,
         }
     }
-}
+}*/
 
 #[derive(Debug)]
 pub struct DebugFontVertex {
@@ -560,18 +563,18 @@ impl DrawLayer {
 pub struct RendererFrame {
     pub pipeline_epoch_map: HashMap<PipelineId, Epoch, BuildHasherDefault<FnvHasher>>,
     pub layers_bouncing_back: HashSet<ScrollLayerId, BuildHasherDefault<FnvHasher>>,
-    pub root_layer: DrawLayer,
+    pub tile_frame: Option<TileFrame>,
 }
 
 impl RendererFrame {
     pub fn new(pipeline_epoch_map: HashMap<PipelineId, Epoch, BuildHasherDefault<FnvHasher>>,
                layers_bouncing_back: HashSet<ScrollLayerId, BuildHasherDefault<FnvHasher>>,
-               root_layer: DrawLayer)
+               tile_frame: Option<TileFrame>)
                -> RendererFrame {
         RendererFrame {
             pipeline_epoch_map: pipeline_epoch_map,
             layers_bouncing_back: layers_bouncing_back,
-            root_layer: root_layer,
+            tile_frame: tile_frame,
         }
     }
 }
@@ -646,18 +649,19 @@ pub struct BatchList {
 
 pub struct CompiledNode {
     // TODO(gw): These are mutually exclusive - unify into an enum?
-    pub vertex_buffer: Option<VertexBuffer>,
-    pub vertex_buffer_id: Option<VertexBufferId>,
-
-    pub batch_list: Vec<BatchList>,
+    //pub vertex_buffer: Option<VertexBuffer>,
+    //pub vertex_buffer_id: Option<VertexBufferId>,
+    //pub batch_list: Vec<BatchList>,
+    //pub primitive_list: PrimitiveList,
 }
 
 impl CompiledNode {
     pub fn new() -> CompiledNode {
         CompiledNode {
-            batch_list: Vec::new(),
-            vertex_buffer: None,
-            vertex_buffer_id: None,
+            //primitive_list: PrimitiveList::new(),
+            //batch_list: Vec::new(),
+            //vertex_buffer: None,
+            //vertex_buffer_id: None,
         }
     }
 }

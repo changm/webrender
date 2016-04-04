@@ -14,7 +14,7 @@ use internal_types::{TextureUpdateDetails, TextureUpdateList, PackedVertex, Rend
 use internal_types::{ORTHO_NEAR_PLANE, ORTHO_FAR_PLANE, DevicePixel};
 use internal_types::{PackedVertexForTextureCacheUpdate, CompositionOp, ChildLayerIndex};
 use internal_types::{AxisDirection, LowLevelFilterOp, DrawCommand, DrawLayer, ANGLE_FLOAT_TO_FIXED};
-use internal_types::{BasicRotationAngle};
+use internal_types::{BasicRotationAngle, FontVertex};
 use ipc_channel::ipc;
 use profiler::{Profiler, BackendProfileCounters};
 use profiler::{RendererProfileTimers, RendererProfileCounters};
@@ -27,13 +27,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
+use std::usize;
 use tessellator::BorderCornerTessellation;
 use texture_cache::{BorderType, TextureCache, TextureInsertOp};
+use tiling::{self, PackedCommand, TileFrame, TextBuffer, PackedTile};
 use time::precise_time_ns;
 use webrender_traits::{ColorF, Epoch, PipelineId, RenderNotifier};
 use webrender_traits::{ImageFormat, MixBlendMode, RenderApiSender};
 use offscreen_gl_context::{NativeGLContext, NativeGLContextMethods};
 use util::RectHelpers;
+
+pub const TEXT_TARGET_SIZE: u32 = 1024;
 
 pub const BLUR_INFLATION_FACTOR: u32 = 3;
 pub const MAX_RASTER_OP_SIZE: u32 = 2048;
@@ -53,6 +57,189 @@ const GL_BLEND_MAX: gl::GLuint = gl::MAX;
 
 #[cfg(any(target_os = "android", target_os = "gonk"))]
 const GL_BLEND_MAX: gl::GLuint = gl::FUNC_ADD;
+
+#[derive(Debug)]
+struct TileBatchInstance {
+    cmd_index: u32,
+    cmd_count: u32,
+    scroll_offset: Point2D<f32>,
+    rect: Rect<f32>,
+}
+
+struct TileBatch {
+    layer_ubo_index: usize,
+    rect_ubo_index: usize,
+    clip_ubo_index: usize,
+    image_ubo_index: usize,
+    gradient_ubo_index: usize,
+    stop_ubo_index: usize,
+    text_ubo_index: usize,
+    //glyph_ubo_index: u32,
+    instances: Vec<TileBatchInstance>,
+}
+
+impl TileBatch {
+    fn new(tile: &PackedTile) -> TileBatch {
+        TileBatch {
+            layer_ubo_index: tile.layer_ubo_index,
+            rect_ubo_index: tile.rect_ubo_index,
+            clip_ubo_index: tile.clip_ubo_index,
+            image_ubo_index: tile.image_ubo_index,
+            gradient_ubo_index: tile.gradient_ubo_index,
+            stop_ubo_index: tile.gradient_stop_ubo_index,
+            text_ubo_index: tile.text_ubo_index,
+            //current_glyph_ubo: 0,
+            instances: Vec::new(),
+        }
+    }
+
+    fn can_add(&self, tile: &PackedTile) -> bool {
+        self.layer_ubo_index == tile.layer_ubo_index &&
+        self.rect_ubo_index == tile.rect_ubo_index &&
+        self.clip_ubo_index == tile.clip_ubo_index &&
+        self.image_ubo_index == tile.image_ubo_index &&
+        self.gradient_ubo_index == tile.gradient_ubo_index &&
+        self.stop_ubo_index == tile.gradient_stop_ubo_index &&
+        self.text_ubo_index == tile.text_ubo_index// &&
+       //current_glyph_ubo == glyph_ubos[tile.glyph_ubo_index];
+    }
+
+    fn add_tile(&mut self, tile: &PackedTile, offset: Point2D<f32>) {
+        self.instances.push(TileBatchInstance {
+            cmd_index: tile.cmd_index as u32,
+            cmd_count: tile.cmd_count as u32,
+            scroll_offset: offset,
+            rect: Rect::new(Point2D::new(tile.rect.origin.x as f32, tile.rect.origin.y as f32),
+                            Size2D::new(tile.rect.size.width as f32, tile.rect.size.height as f32)),
+        });
+    }
+
+    fn flush(&self) {
+        panic!("todo");
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum UboBindLocation {
+    Misc,
+    IndexBuffer,
+    Rectangles,
+    Glyphs,
+    Texts,
+    Images,
+    Gradients,
+    GradientStops,
+    Layers,
+    Clips,
+    Instances,
+}
+
+impl UboBindLocation {
+    pub fn get_item_size_and_fixed_size(&self) -> (usize, usize) {
+        match *self {
+            UboBindLocation::Misc => (0, mem::size_of::<MiscTileData>()),
+            UboBindLocation::IndexBuffer => (4 * mem::size_of::<u32>(), 0),
+            UboBindLocation::Rectangles => (mem::size_of::<tiling::PackedRectangle>(), 0),
+            UboBindLocation::Glyphs => (mem::size_of::<tiling::PackedGlyph>(), 0),
+            UboBindLocation::Texts => (mem::size_of::<tiling::PackedText>(), 0),
+            UboBindLocation::Images => (mem::size_of::<tiling::PackedImage>(), 0),
+            UboBindLocation::Gradients => (mem::size_of::<tiling::PackedGradient>(), 0),
+            UboBindLocation::GradientStops => (mem::size_of::<tiling::PackedGradientStop>(), 0),
+            UboBindLocation::Layers => (mem::size_of::<tiling::PackedLayer>(), 0),
+            UboBindLocation::Clips => (mem::size_of::<tiling::Clip>(), 0),
+            UboBindLocation::Instances => (mem::size_of::<TileBatchInstance>(), 0),
+        }
+    }
+
+    pub fn get_array_len(&self, max_ubo_size: usize) -> usize {
+        let (item_size, fixed_size) = self.get_item_size_and_fixed_size();
+        (self.get_max_ubo_size(max_ubo_size) - fixed_size) / item_size
+    }
+
+    pub fn get_max_ubo_size(&self, max_ubo_size: usize) -> usize {
+        // To work around an apparent bug in the nVidia shader compiler :(
+        match *self {
+            UboBindLocation::Misc => mem::size_of::<MiscTileData>(),
+            UboBindLocation::IndexBuffer => max_ubo_size,
+            UboBindLocation::Rectangles => max_ubo_size,
+            UboBindLocation::Glyphs => max_ubo_size,
+            UboBindLocation::Texts => max_ubo_size,
+            UboBindLocation::Images => 4096,
+            UboBindLocation::Gradients => 4096,
+            UboBindLocation::GradientStops => 4096,
+            UboBindLocation::Layers => max_ubo_size,
+            UboBindLocation::Clips => 8192,
+            UboBindLocation::Instances => max_ubo_size,
+        }
+    }
+}
+
+struct UniformBufferBinding {
+    name: &'static str,
+    location: UboBindLocation,
+}
+
+const UBO_BINDINGS: [UniformBufferBinding; 11] = [
+    UniformBufferBinding {
+        name: "Misc",
+        location: UboBindLocation::Misc,
+    },
+    UniformBufferBinding {
+        name: "IndexBuffer",
+        location: UboBindLocation::IndexBuffer,
+    },
+    UniformBufferBinding {
+        name: "Rectangles",
+        location: UboBindLocation::Rectangles
+    },
+    UniformBufferBinding {
+        name: "Glyphs",
+        location: UboBindLocation::Glyphs
+    },
+    UniformBufferBinding {
+        name: "Texts",
+        location: UboBindLocation::Texts
+    },
+    UniformBufferBinding {
+        name: "Images",
+        location: UboBindLocation::Images
+    },
+    UniformBufferBinding {
+        name: "Gradients",
+        location: UboBindLocation::Gradients
+    },
+    UniformBufferBinding {
+        name: "GradientStops",
+        location: UboBindLocation::GradientStops
+    },
+    UniformBufferBinding {
+        name: "Layers",
+        location: UboBindLocation::Layers
+    },
+    UniformBufferBinding {
+        name: "Clips",
+        location: UboBindLocation::Clips
+    },
+    UniformBufferBinding {
+        name: "Instances",
+        location: UboBindLocation::Instances
+    },
+];
+
+/*
+#[derive(Debug, Copy, Clone)]
+pub struct PackedPrimitiveKey(u32);
+
+impl PackedPrimitiveKey {
+    pub fn new(key: &PrimitiveKey) -> PackedPrimitiveKey {
+        debug_assert!(key.index < 65536);       // ensure u16 (should be bounded by max ubo size anyway)
+        PackedPrimitiveKey(key.index | ((key.kind as u32) << 24))
+    }
+}*/
+
+struct MiscTileData {
+    background_color: ColorF,
+}
 
 #[derive(Clone, Copy)]
 struct VertexBuffer {
@@ -147,6 +334,10 @@ pub struct Renderer {
 
     mask_program_id: ProgramId,
 
+    scene_program_id: ProgramId,
+    complex_program_id: ProgramId,
+    text_program_id: ProgramId,
+
     notifier: Arc<Mutex<Option<Box<RenderNotifier>>>>,
 
     enable_profiler: bool,
@@ -161,8 +352,11 @@ pub struct Renderer {
     raster_op_target_a8: TextureId,
     raster_op_target_rgba8: TextureId,
     temporary_fb_texture: TextureId,
+    text_composite_target: TextureId,
 
-    gpu_profile: GpuProfile,
+    //gpu_profile: GpuProfile,
+    quad_vao_id: VAOId,
+    quad_vao_index_count: gl::GLint,
 }
 
 impl Renderer {
@@ -183,15 +377,57 @@ impl Renderer {
                                      Box::new(file_watch_handler));
         device.begin_frame();
 
-        let quad_program_id = device.create_program("quad");
-        let blit_program_id = device.create_program("blit");
-        let border_program_id = device.create_program("border");
-        let blend_program_id = device.create_program("blend");
-        let filter_program_id = device.create_program("filter");
-        let box_shadow_program_id = device.create_program("box_shadow");
-        let blur_program_id = device.create_program("blur");
-        let mask_program_id = device.create_program("mask");
+        let quad_program_id = ProgramId(0);// device.create_program("quad");
+        let blit_program_id = ProgramId(0);//device.create_program("blit");
+        let border_program_id = ProgramId(0);//device.create_program("border");
+        let blend_program_id = ProgramId(0);//device.create_program("blend");
+        let filter_program_id = ProgramId(0);//device.create_program("filter");
+        let box_shadow_program_id = ProgramId(0);//device.create_program("box_shadow");
+        let blur_program_id = ProgramId(0);//device.create_program("blur");
+        let mask_program_id = ProgramId(0);//device.create_program("mask");
         let max_raster_op_size = MAX_RASTER_OP_SIZE * options.device_pixel_ratio as u32;
+
+        let max_ubo_size = gl::get_integer_v(gl::MAX_UNIFORM_BLOCK_SIZE) as usize;
+        println!("Max UBO size = {}", max_ubo_size);
+
+        //println!("{:?}: {:?}", UboBindLocation::Misc, UboBindLocation::Misc.get_array_len(max_ubo_size));
+        println!("{:?}: {:?}", UboBindLocation::IndexBuffer, UboBindLocation::IndexBuffer.get_array_len(max_ubo_size));
+        println!("{:?}: {:?}", UboBindLocation::Rectangles, UboBindLocation::Rectangles.get_array_len(max_ubo_size));
+        println!("{:?}: {:?}", UboBindLocation::Glyphs, UboBindLocation::Glyphs.get_array_len(max_ubo_size));
+        println!("{:?}: {:?}", UboBindLocation::Texts, UboBindLocation::Texts.get_array_len(max_ubo_size));
+        println!("{:?}: {:?}", UboBindLocation::Images, UboBindLocation::Images.get_array_len(max_ubo_size));
+        println!("{:?}: {:?}", UboBindLocation::Gradients, UboBindLocation::Gradients.get_array_len(max_ubo_size));
+        println!("{:?}: {:?}", UboBindLocation::GradientStops, UboBindLocation::GradientStops.get_array_len(max_ubo_size));
+        println!("{:?}: {:?}", UboBindLocation::Layers, UboBindLocation::Layers.get_array_len(max_ubo_size));
+        println!("{:?}: {:?}", UboBindLocation::Clips, UboBindLocation::Clips.get_array_len(max_ubo_size));
+        println!("{:?}: {:?}", UboBindLocation::Instances, UboBindLocation::Instances.get_array_len(max_ubo_size));
+
+        let mut preamble = String::new();
+
+        preamble.push_str(&format!("#define UBO_INDEX_COUNT {:?}\n", UboBindLocation::IndexBuffer.get_array_len(max_ubo_size)));
+        preamble.push_str(&format!("#define UBO_RECTANGLE_COUNT {:?}\n", UboBindLocation::Rectangles.get_array_len(max_ubo_size)));
+        preamble.push_str(&format!("#define UBO_GLYPH_COUNT {:?}\n", UboBindLocation::Glyphs.get_array_len(max_ubo_size)));
+        preamble.push_str(&format!("#define UBO_TEXT_COUNT {:?}\n", UboBindLocation::Texts.get_array_len(max_ubo_size)));
+        preamble.push_str(&format!("#define UBO_IMAGE_COUNT {:?}\n", UboBindLocation::Images.get_array_len(max_ubo_size)));
+        preamble.push_str(&format!("#define UBO_GRADIENT_COUNT {:?}\n", UboBindLocation::Gradients.get_array_len(max_ubo_size)));
+        preamble.push_str(&format!("#define UBO_GRADIENT_STOP_COUNT {:?}\n", UboBindLocation::GradientStops.get_array_len(max_ubo_size)));
+        preamble.push_str(&format!("#define UBO_LAYER_COUNT {:?}\n", UboBindLocation::Layers.get_array_len(max_ubo_size)));
+        preamble.push_str(&format!("#define UBO_CLIP_COUNT {:?}\n", UboBindLocation::Clips.get_array_len(max_ubo_size)));
+        preamble.push_str(&format!("#define UBO_INSTANCE_COUNT {:?}\n", UboBindLocation::Instances.get_array_len(max_ubo_size)));
+
+        let scene_program_id = device.create_program_with_prefix("tiling_opaque", "shared_tiling", Some(preamble.clone()));
+        let text_program_id = device.create_program("text", "shared_other");
+        let complex_program_id = device.create_program_with_prefix("tiling_complex", "shared_tiling", Some(preamble));
+
+        for info in &UBO_BINDINGS {
+            let block_index = gl::get_uniform_block_index(scene_program_id.0, info.name);
+            gl::uniform_block_binding(scene_program_id.0, block_index, info.location as u32);
+            println!("S: {} {} -> {}", info.name, block_index, info.location as u32);
+
+            let block_index = gl::get_uniform_block_index(complex_program_id.0, info.name);
+            gl::uniform_block_binding(complex_program_id.0, block_index, info.location as u32);
+            println!("C: {} {} -> {}", info.name, block_index, info.location as u32);
+        }
 
         let texture_ids = device.create_texture_ids(1024);
         let mut texture_cache = TextureCache::new(texture_ids);
@@ -248,7 +484,89 @@ impl Renderer {
                             RenderTargetMode::RenderTarget,
                             None);
 
+        let text_composite_target = device.create_texture_ids(1)[0];
+        device.init_texture(text_composite_target,
+                            TEXT_TARGET_SIZE * options.device_pixel_ratio as u32,
+                            TEXT_TARGET_SIZE * options.device_pixel_ratio as u32,
+                            ImageFormat::RGBA8,
+                            TextureFilter::Linear,
+                            RenderTargetMode::RenderTarget,
+                            None);
+
         let temporary_fb_texture = device.create_texture_ids(1)[0];
+
+        let x0 = 0.0;
+        let y0 = 0.0;
+        let x1 = options.tile_size.width as f32;
+        let y1 = options.tile_size.height as f32;
+
+        let quad_indices: [u16; 6] = [ 0, 1, 2, 2, 3, 1 ];
+        let quad_vertices = [
+            PackedVertex {
+                pos: [x0, y0],
+                rect: [x0, y0, x1, y1],
+            },
+            PackedVertex {
+                pos: [x1, y0],
+                rect: [x0, y0, x1, y1],
+            },
+            PackedVertex {
+                pos: [x0, y1],
+                rect: [x0, y0, x1, y1],
+            },
+            PackedVertex {
+                pos: [x1, y1],
+                rect: [x0, y0, x1, y1],
+            },
+        ];
+/*
+        let mut quad_indices: Vec<u16> = Vec::new();
+        let mut quad_vertices = Vec::new();
+        let sub_tile_size = 32;
+        let sub_tile_x_count = (options.tile_size.width + sub_tile_size - 1) / sub_tile_size;
+        let sub_tile_y_count = (options.tile_size.height + sub_tile_size - 1) / sub_tile_size;
+
+        for y in 0..sub_tile_y_count {
+            for x in 0..sub_tile_x_count {
+                let base_index = quad_vertices.len() as u16;
+                quad_indices.push(base_index + 0);
+                quad_indices.push(base_index + 1);
+                quad_indices.push(base_index + 2);
+                quad_indices.push(base_index + 2);
+                quad_indices.push(base_index + 3);
+                quad_indices.push(base_index + 1);
+
+                let x0 = (x * sub_tile_size) as f32;
+                let y0 = (y * sub_tile_size) as f32;
+                let x1 = (x0 + sub_tile_size as f32).min(options.tile_size.width as f32);
+                let y1 = (y0 + sub_tile_size as f32).min(options.tile_size.height as f32);
+
+                quad_vertices.extend_from_slice(&[
+                    PackedVertex {
+                        pos: [x0, y0],
+                        rect: [x0, y0, x1, y1],
+                    },
+                    PackedVertex {
+                        pos: [x1, y0],
+                        rect: [x0, y0, x1, y1],
+                    },
+                    PackedVertex {
+                        pos: [x0, y1],
+                        rect: [x0, y0, x1, y1],
+                    },
+                    PackedVertex {
+                        pos: [x1, y1],
+                        rect: [x0, y0, x1, y1],
+                    },
+                ]);
+            }
+        }
+*/
+
+        let quad_vao_id = device.create_vao(VertexFormat::Triangles, None);
+        device.bind_vao(quad_vao_id);
+        device.update_vao_indices(quad_vao_id, &quad_indices, VertexUsageHint::Static);
+        device.update_vao_main_vertices(quad_vao_id, &quad_vertices, VertexUsageHint::Static);
 
         device.end_frame();
 
@@ -258,6 +576,7 @@ impl Renderer {
         // texture ids
         let context_handle = NativeGLContext::current_handle();
 
+        let tile_size = options.tile_size;
         let (device_pixel_ratio, enable_aa) = (options.device_pixel_ratio, options.enable_aa);
         let payload_tx_for_backend = payload_tx.clone();
         thread::spawn(move || {
@@ -271,7 +590,9 @@ impl Renderer {
                                                  texture_cache,
                                                  enable_aa,
                                                  backend_notifier,
-                                                 context_handle);
+                                                 context_handle,
+                                                 max_ubo_size,
+                                                 tile_size);
             backend.run();
         });
 
@@ -297,6 +618,9 @@ impl Renderer {
             box_shadow_program_id: box_shadow_program_id,
             blur_program_id: blur_program_id,
             mask_program_id: mask_program_id,
+            scene_program_id: scene_program_id,
+            complex_program_id: complex_program_id,
+            text_program_id: text_program_id,
             u_blend_params: UniformLocation::invalid(),
             u_filter_params: UniformLocation::invalid(),
             u_direction: UniformLocation::invalid(),
@@ -316,8 +640,11 @@ impl Renderer {
             raster_op_target_a8: raster_op_target_a8,
             raster_op_target_rgba8: raster_op_target_rgba8,
             temporary_fb_texture: temporary_fb_texture,
+            text_composite_target: text_composite_target,
             max_raster_op_size: max_raster_op_size,
-            gpu_profile: GpuProfile::new(),
+            //gpu_profile: GpuProfile::new(),
+            quad_vao_id: quad_vao_id,
+            quad_vao_index_count: quad_indices.len() as gl::GLint,
         };
 
         renderer.update_uniform_locations();
@@ -385,7 +712,7 @@ impl Renderer {
     pub fn render(&mut self, framebuffer_size: Size2D<u32>) {
         let mut profile_timers = RendererProfileTimers::new();
 
-        self.gpu_profile.begin();
+        let gpu_ns = 0;//self.gpu_profile.begin();
 
         profile_timers.cpu_time.profile(|| {
             self.device.begin_frame();
@@ -404,7 +731,7 @@ impl Renderer {
         let ns = current_time - self.last_time;
         self.profile_counters.frame_time.set(ns);
 
-        let gpu_ns = self.gpu_profile.end();
+        //self.gpu_profile.end();
         profile_timers.gpu_time.set(gpu_ns);
 
         if self.enable_profiler {
@@ -437,6 +764,8 @@ impl Renderer {
             for update in update_list.updates {
                 match update.op {
                     BatchUpdateOp::Create(vertices) => {
+                        panic!("todo");
+                        /*
                         if self.quad_vertex_buffer.is_none() {
                             self.quad_vertex_buffer = Some(self.device.create_quad_vertex_buffer())
                         }
@@ -462,7 +791,7 @@ impl Renderer {
                                 },
                                 offset: 0,
                             }
-                        ]);
+                        ]);*/
                     }
                     BatchUpdateOp::Destroy => {
                         let vertex_buffers_and_offsets =
@@ -485,7 +814,8 @@ impl Renderer {
         let update_uniforms = !self.pending_shader_updates.is_empty();
 
         for path in self.pending_shader_updates.drain(..) {
-            self.device.refresh_shader(path);
+            panic!("todo");
+            //self.device.refresh_shader(path);
         }
 
         if update_uniforms {
@@ -1127,6 +1457,7 @@ impl Renderer {
         }
     }
 
+/*
     fn draw_layer(&mut self,
                   layer: &DrawLayer,
                   render_context: &RenderContext) {
@@ -1651,6 +1982,380 @@ impl Renderer {
             }
         }
     }
+*/
+
+    fn draw_text(&mut self,
+                 text_buffer: &TextBuffer,
+                 texture: TextureId) {
+        self.device.bind_render_target(Some(self.text_composite_target));
+        gl::viewport(0, 0, (TEXT_TARGET_SIZE * self.device_pixel_ratio as u32) as gl::GLint, (TEXT_TARGET_SIZE * self.device_pixel_ratio as u32) as gl::GLint);
+
+        gl::clear_color(1.0, 1.0, 1.0, 0.0);
+        gl::clear(gl::COLOR_BUFFER_BIT);
+
+        let projection = Matrix4::ortho(0.0,
+                                        TEXT_TARGET_SIZE as f32,
+                                        0.0,
+                                        TEXT_TARGET_SIZE as f32,
+                                        ORTHO_NEAR_PLANE,
+                                        ORTHO_FAR_PLANE);
+
+        let (mut indices, mut vertices) = (vec![], vec![]);
+
+        for (_, run) in &text_buffer.texts {
+            for glyph in &run.glyphs {
+                let base_index = vertices.len() as u16;
+                indices.push(base_index + 0);
+                indices.push(base_index + 1);
+                indices.push(base_index + 2);
+                indices.push(base_index + 2);
+                indices.push(base_index + 3);
+                indices.push(base_index + 1);
+
+                vertices.extend_from_slice(&[
+                    FontVertex {
+                        x: glyph.p0.x,
+                        y: glyph.p0.y,
+                        s: glyph.st0.x,
+                        t: glyph.st0.y,
+                    },
+                    FontVertex {
+                        x: glyph.p1.x,
+                        y: glyph.p0.y,
+                        s: glyph.st1.x,
+                        t: glyph.st0.y,
+                    },
+                    FontVertex {
+                        x: glyph.p0.x,
+                        y: glyph.p1.y,
+                        s: glyph.st0.x,
+                        t: glyph.st1.y,
+                    },
+                    FontVertex {
+                        x: glyph.p1.x,
+                        y: glyph.p1.y,
+                        s: glyph.st1.x,
+                        t: glyph.st1.y,
+                    },
+                ]);
+            }
+        }
+
+        let vao_id = self.device.create_vao(VertexFormat::Font, None);
+
+        self.device.bind_program(self.text_program_id, &projection);
+        self.device.bind_color_texture(texture);
+        self.device.bind_vao(vao_id);
+        self.device.update_vao_indices(vao_id, &indices[..], VertexUsageHint::Dynamic);
+        self.device.update_vao_main_vertices(vao_id, &vertices[..], VertexUsageHint::Dynamic);
+        self.device.draw_triangles_u16(0, indices.len() as gl::GLint);
+        self.device.delete_vao(vao_id);
+    }
+
+    fn draw_tile_frame(&mut self,
+                       tile_frame: &TileFrame,
+                       framebuffer_size: &Size2D<u32>) {
+        let projection = Matrix4::ortho(0.0,
+                                        tile_frame.viewport_size.width as f32,
+                                        tile_frame.viewport_size.height as f32,
+                                        0.0,
+                                        ORTHO_NEAR_PLANE,
+                                        ORTHO_FAR_PLANE);
+
+        let mut g = GpuProfile::new();
+        g.begin();
+
+        gl::disable(gl::BLEND);
+        gl::depth_mask(false);
+        gl::stencil_mask(0xff);
+        gl::disable(gl::STENCIL_TEST);
+
+        self.draw_text(&tile_frame.text_buffer, tile_frame.color_texture_id);
+
+        g.end();
+        let text_ns = g.get();
+        g.begin();
+
+        self.device.bind_render_target(None);
+        gl::viewport(0, 0, framebuffer_size.width as i32, framebuffer_size.height as i32);
+
+        gl::clear(gl::STENCIL_BUFFER_BIT);
+        gl::enable(gl::STENCIL_TEST);
+        gl::stencil_func(gl::ALWAYS, 1, 0xff);
+        gl::stencil_op(gl::REPLACE, gl::REPLACE, gl::REPLACE);
+
+        let misc_data = MiscTileData {
+            background_color: ColorF::new(1.0, 1.0, 1.0, 1.0),
+        };
+
+        let misc_ubos = gl::gen_buffers(2);
+        let misc_ubo = misc_ubos[0];
+        let cmd_ubo = misc_ubos[1];
+
+        gl::bind_buffer(gl::UNIFORM_BUFFER, misc_ubo);
+        gl::buffer_data_raw(gl::UNIFORM_BUFFER, &misc_data, gl::STATIC_DRAW);
+
+        gl::bind_buffer(gl::UNIFORM_BUFFER, cmd_ubo);
+        gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.uniforms.cmd_ubo, gl::STATIC_DRAW);
+
+        let layer_ubos = gl::gen_buffers(tile_frame.uniforms.layer_ubos.len() as gl::GLint);
+        let rect_ubos = gl::gen_buffers(tile_frame.uniforms.rect_ubos.len() as gl::GLint);
+        let clip_ubos = gl::gen_buffers(tile_frame.uniforms.clip_ubos.len() as gl::GLint);
+        let image_ubos = gl::gen_buffers(tile_frame.uniforms.image_ubos.len() as gl::GLint);
+        let gradient_ubos = gl::gen_buffers(tile_frame.uniforms.gradient_ubos.len() as gl::GLint);
+        let gradient_stop_ubos = gl::gen_buffers(tile_frame.uniforms.gradient_stop_ubos.len() as gl::GLint);
+        //let glyph_ubos = gl::gen_buffers(tile_frame.uniforms.glyph_ubos.len() as gl::GLint);
+        let text_ubos = gl::gen_buffers(tile_frame.uniforms.text_ubos.len() as gl::GLint);
+
+        for ubo_index in 0..layer_ubos.len() {
+            gl::bind_buffer(gl::UNIFORM_BUFFER, layer_ubos[ubo_index]);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.uniforms.layer_ubos[ubo_index].items, gl::STATIC_DRAW);
+        }
+
+        for ubo_index in 0..rect_ubos.len() {
+            gl::bind_buffer(gl::UNIFORM_BUFFER, rect_ubos[ubo_index]);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.uniforms.rect_ubos[ubo_index].items, gl::STATIC_DRAW);
+        }
+
+        for ubo_index in 0..clip_ubos.len() {
+            gl::bind_buffer(gl::UNIFORM_BUFFER, clip_ubos[ubo_index]);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.uniforms.clip_ubos[ubo_index].items, gl::STATIC_DRAW);
+        }
+
+        for ubo_index in 0..image_ubos.len() {
+            gl::bind_buffer(gl::UNIFORM_BUFFER, image_ubos[ubo_index]);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.uniforms.image_ubos[ubo_index].items, gl::STATIC_DRAW);
+        }
+
+        for ubo_index in 0..gradient_ubos.len() {
+            gl::bind_buffer(gl::UNIFORM_BUFFER, gradient_ubos[ubo_index]);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.uniforms.gradient_ubos[ubo_index].items, gl::STATIC_DRAW);
+        }
+
+        for ubo_index in 0..gradient_stop_ubos.len() {
+            gl::bind_buffer(gl::UNIFORM_BUFFER, gradient_stop_ubos[ubo_index]);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.uniforms.gradient_stop_ubos[ubo_index].items, gl::STATIC_DRAW);
+        }
+
+/*
+        for ubo_index in 0..glyph_ubos.len() {
+            gl::bind_buffer(gl::UNIFORM_BUFFER, glyph_ubos[ubo_index]);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.uniforms.glyph_ubos[ubo_index].items, gl::STATIC_DRAW);
+        }
+*/
+
+        for ubo_index in 0..text_ubos.len() {
+            gl::bind_buffer(gl::UNIFORM_BUFFER, text_ubos[ubo_index]);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.uniforms.text_ubos[ubo_index].items, gl::STATIC_DRAW);
+        }
+
+        gl::bind_buffer(gl::UNIFORM_BUFFER, 0);
+        gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Misc as u32, misc_ubo);
+        gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::IndexBuffer as u32, cmd_ubo);
+
+        self.device.bind_program(self.scene_program_id, &projection);
+        self.device.bind_mask_texture(self.text_composite_target);
+        self.device.bind_vao(self.quad_vao_id);
+
+        let mut tile_batches: Vec<TileBatch> = Vec::new();
+
+        for (tile_index, tile) in tile_frame.tiles.iter().enumerate() {
+            let need_new_batch = match tile_batches.last() {
+                Some(ref batch) => !batch.can_add(tile),
+                None => true,
+            };
+
+            if need_new_batch {
+                tile_batches.push(TileBatch::new(tile));
+            }
+
+            let batch = tile_batches.last_mut().unwrap();
+            batch.add_tile(tile, tile_frame.scroll_offset);
+
+            if self.enable_profiler {
+                let tile_x0 = tile.rect.origin.x as f32;
+                let tile_y0 = tile.rect.origin.y as f32;
+                let tile_x1 = tile_x0 + tile.rect.size.width as f32;
+                let tile_y1 = tile_y0 + tile.rect.size.height as f32;
+
+                self.debug.add_line(tile_x0,
+                                    tile_y0,
+                                    &ColorF::new(0.0, 0.0, 0.0, 1.0),
+                                    tile_x1,
+                                    tile_y0,
+                                    &ColorF::new(0.0, 0.0, 0.0, 1.0));
+                self.debug.add_line(tile_x0,
+                                    tile_y1,
+                                    &ColorF::new(0.0, 0.0, 0.0, 1.0),
+                                    tile_x1,
+                                    tile_y1,
+                                    &ColorF::new(0.0, 0.0, 0.0, 1.0));
+                self.debug.add_line(tile_x0,
+                                    tile_y0,
+                                    &ColorF::new(0.0, 0.0, 0.0, 1.0),
+                                    tile_x0,
+                                    tile_y1,
+                                    &ColorF::new(0.0, 0.0, 0.0, 1.0));
+                self.debug.add_line(tile_x1,
+                                    tile_y0,
+                                    &ColorF::new(0.0, 0.0, 0.0, 1.0),
+                                    tile_x1,
+                                    tile_y1,
+                                    &ColorF::new(0.0, 0.0, 0.0, 1.0));
+                self.debug.add_text((tile_x0 + tile_x1) * 0.5,
+                                    (tile_y0 + tile_y1) * 0.5,
+                                    &format!("{}", tile.cmd_count),
+                                    &ColorF::new(1.0, 0.0, 1.0, 1.0));
+            }
+        }
+
+        let mut current_layer_ubo = usize::MAX;
+        let mut current_rect_ubo = usize::MAX;
+        let mut current_clip_ubo = usize::MAX;
+        let mut current_image_ubo = usize::MAX;
+        let mut current_gradient_ubo = usize::MAX;
+        let mut current_stop_ubo = usize::MAX;
+        let mut current_text_ubo = usize::MAX;
+        //let current_glyph_ubo: u32,
+
+        let batch_ubos = gl::gen_buffers(tile_batches.len() as gl::GLint);
+
+        for (batch_index, batch) in tile_batches.iter().enumerate() {
+            gl::bind_buffer(gl::UNIFORM_BUFFER, batch_ubos[batch_index]);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &batch.instances, gl::STATIC_DRAW);
+            gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Instances as u32, batch_ubos[batch_index]);
+
+            if current_layer_ubo != batch.layer_ubo_index {
+                current_layer_ubo = batch.layer_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Layers as u32, layer_ubos[current_layer_ubo]);
+            }
+
+            if current_rect_ubo != batch.rect_ubo_index {
+                current_rect_ubo = batch.rect_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Rectangles as u32, rect_ubos[current_rect_ubo]);
+            }
+
+            if current_clip_ubo != batch.clip_ubo_index {
+                current_clip_ubo = batch.clip_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Clips as u32, clip_ubos[current_clip_ubo]);
+            }
+
+            if current_image_ubo != batch.image_ubo_index {
+                current_image_ubo = batch.image_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Images as u32, image_ubos[current_image_ubo]);
+            }
+
+            if current_gradient_ubo != batch.gradient_ubo_index {
+                current_gradient_ubo = batch.gradient_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Gradients as u32, gradient_ubos[current_gradient_ubo]);
+            }
+
+            if current_stop_ubo != batch.stop_ubo_index {
+                current_stop_ubo = batch.stop_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::GradientStops as u32, gradient_stop_ubos[current_stop_ubo]);
+            }
+
+            if current_text_ubo != batch.text_ubo_index {
+                current_text_ubo = batch.text_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Texts as u32, text_ubos[current_text_ubo]);
+            }
+/*
+            if current_glyph_ubo != glyph_ubos[tile.glyph_ubo_index] {
+                current_glyph_ubo = glyph_ubos[tile.glyph_ubo_index];
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Glyphs as u32, current_glyph_ubo);
+            }
+*/
+
+            self.device.draw_indexed_triangles_instanced_u16(self.quad_vao_index_count, batch.instances.len() as gl::GLint);
+        }
+
+        g.end();
+        let tile_ns = g.get();
+        g.begin();
+
+        gl::stencil_op(gl::KEEP, gl::KEEP, gl::KEEP);
+        gl::stencil_func(gl::EQUAL, 0, 0xff);
+
+        self.device.bind_program(self.complex_program_id, &projection);
+
+        current_layer_ubo = usize::MAX;
+        current_rect_ubo = usize::MAX;
+        current_clip_ubo = usize::MAX;
+        current_image_ubo = usize::MAX;
+        current_gradient_ubo = usize::MAX;
+        current_stop_ubo = usize::MAX;
+        current_text_ubo = usize::MAX;
+
+        for (batch_index, batch) in tile_batches.iter().enumerate() {
+            //gl::bind_buffer(gl::UNIFORM_BUFFER, batch_ubos[batch_index]);
+            gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Instances as u32, batch_ubos[batch_index]);
+
+            if current_layer_ubo != batch.layer_ubo_index {
+                current_layer_ubo = batch.layer_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Layers as u32, layer_ubos[current_layer_ubo]);
+            }
+
+            if current_rect_ubo != batch.rect_ubo_index {
+                current_rect_ubo = batch.rect_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Rectangles as u32, rect_ubos[current_rect_ubo]);
+            }
+
+            if current_clip_ubo != batch.clip_ubo_index {
+                current_clip_ubo = batch.clip_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Clips as u32, clip_ubos[current_clip_ubo]);
+            }
+
+            if current_image_ubo != batch.image_ubo_index {
+                current_image_ubo = batch.image_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Images as u32, image_ubos[current_image_ubo]);
+            }
+
+            if current_gradient_ubo != batch.gradient_ubo_index {
+                current_gradient_ubo = batch.gradient_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Gradients as u32, gradient_ubos[current_gradient_ubo]);
+            }
+
+            if current_stop_ubo != batch.stop_ubo_index {
+                current_stop_ubo = batch.stop_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::GradientStops as u32, gradient_stop_ubos[current_stop_ubo]);
+            }
+
+            if current_text_ubo != batch.text_ubo_index {
+                current_text_ubo = batch.text_ubo_index;
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Texts as u32, text_ubos[current_text_ubo]);
+            }
+/*
+            if current_glyph_ubo != glyph_ubos[tile.glyph_ubo_index] {
+                current_glyph_ubo = glyph_ubos[tile.glyph_ubo_index];
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UboBindLocation::Glyphs as u32, current_glyph_ubo);
+            }
+*/
+
+            self.device.draw_indexed_triangles_instanced_u16(self.quad_vao_index_count, batch.instances.len() as gl::GLint);
+        }
+
+        gl::disable(gl::STENCIL_TEST);
+
+        gl::delete_buffers(&misc_ubos);
+        gl::delete_buffers(&layer_ubos);
+        gl::delete_buffers(&rect_ubos);
+        gl::delete_buffers(&clip_ubos);
+        gl::delete_buffers(&image_ubos);
+        gl::delete_buffers(&gradient_ubos);
+        gl::delete_buffers(&gradient_stop_ubos);
+        gl::delete_buffers(&text_ubos);
+        gl::delete_buffers(&batch_ubos);
+        //gl::delete_buffers(&glyph_ubos);
+
+        g.end();
+        let complex_ns = g.get();
+
+        let text_ms = text_ns as f64 / 1000000.0;
+        let tile_ms = tile_ns as f64 / 1000000.0;
+        let complex_ms = complex_ns as f64 / 1000000.0;
+
+        println!("text={} tile={} complex={}", text_ms, tile_ms, complex_ms);
+    }
 
     fn draw_frame(&mut self, framebuffer_size: Size2D<u32>) {
         if let Some(frame) = self.current_frame.take() {
@@ -1666,11 +2371,12 @@ impl Renderer {
             // TODO(gw): Doesn't work well with transforms.
             //           Look into this...
             gl::disable(gl::DEPTH_TEST);
-            gl::depth_func(gl::LEQUAL);
-            gl::enable(gl::SCISSOR_TEST);
+            gl::disable(gl::SCISSOR_TEST);
+            gl::disable(gl::BLEND);
 
-            self.draw_layer(&frame.root_layer,
-                            &render_context);
+            if let Some(ref tile_frame) = frame.tile_frame {
+                self.draw_tile_frame(tile_frame, &framebuffer_size);
+            }
 
             // Restore frame - avoid borrow checker!
             self.current_frame = Some(frame);
@@ -1714,6 +2420,7 @@ pub struct RendererOptions {
     pub enable_aa: bool,
     pub enable_msaa: bool,
     pub enable_profiler: bool,
+    pub tile_size: Size2D<i32>,
 }
 
 fn draw_simple_triangles(simple_triangles_vao: &mut Option<VAOId>,

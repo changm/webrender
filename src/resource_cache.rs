@@ -304,10 +304,10 @@ impl ResourceCache {
 
     #[cfg(not(target_os = "windows"))]
     pub fn raster_pending_glyphs(&mut self,
-                                 thread_pool: &mut scoped_threadpool::Pool,
+                                 //thread_pool: &mut scoped_threadpool::Pool,
                                  frame_id: FrameId) {
         // Run raster jobs in parallel
-        run_raster_jobs(thread_pool,
+        run_raster_jobs(//thread_pool,
                         &mut self.pending_raster_jobs,
                         &self.font_templates,
                         self.device_pixel_ratio,
@@ -447,7 +447,7 @@ impl ResourceCache {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn run_raster_jobs(thread_pool: &mut scoped_threadpool::Pool,
+fn run_raster_jobs(//thread_pool: &mut scoped_threadpool::Pool,
                    pending_raster_jobs: &mut Vec<GlyphRasterJob>,
                    font_templates: &HashMap<FontKey, FontTemplate, BuildHasherDefault<FnvHasher>>,
                    device_pixel_ratio: f32,
@@ -457,9 +457,9 @@ fn run_raster_jobs(thread_pool: &mut scoped_threadpool::Pool,
     }
 
     // Run raster jobs in parallel
-    thread_pool.scoped(|scope| {
+    //thread_pool.scoped(|scope| {
         for job in pending_raster_jobs {
-            scope.execute(|| {
+            //scope.execute(|| {
                 let font_template = &font_templates[&job.glyph_key.font_key];
                 FONT_CONTEXT.with(move |font_context| {
                     let mut font_context = font_context.borrow_mut();
@@ -478,9 +478,9 @@ fn run_raster_jobs(thread_pool: &mut scoped_threadpool::Pool,
                                                         device_pixel_ratio,
                                                         enable_aa);
                 });
-            });
+            //});
         }
-    });
+    //});
 }
 
 pub trait Resource {

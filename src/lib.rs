@@ -29,6 +29,7 @@ mod scene;
 mod spring;
 mod tessellator;
 mod texture_cache;
+mod tiling;
 mod util;
 
 mod platform {

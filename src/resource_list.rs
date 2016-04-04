@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use aabbtree::AABBTreeNode;
+//use aabbtree::AABBTreeNode;
 use app_units::Au;
 use batch_builder;
 use euclid::{Rect, Size2D};
@@ -143,6 +143,7 @@ impl ResourceList {
     }
 }
 
+/*
 pub trait BuildRequiredResources {
     fn build_resource_list(&mut self,
                            resource_cache: &ResourceCache,
@@ -160,177 +161,53 @@ impl BuildRequiredResources for AABBTreeNode {
         //let _pf = util::ProfileScope::new("  build_resource_list");
         let mut resource_list = ResourceList::new(resource_cache.device_pixel_ratio());
 
-        for group in &self.draw_list_group_segments {
-            for draw_list_index_buffer in &group.index_buffers {
-                let draw_list = resource_cache.get_draw_list(draw_list_index_buffer.draw_list_id);
+        for item in &self.items {
+            let draw_list = resource_cache.get_draw_list(item.draw_list_id);
+            let auxiliary_lists =
+                pipeline_auxiliary_lists.get(&draw_list.pipeline_id)
+                                        .expect("No auxiliary lists for pipeline?!");
 
-                for index in &draw_list_index_buffer.indices {
-                    let DrawListItemIndex(index) = *index;
-                    let display_item = &draw_list.items[index as usize];
-                    let auxiliary_lists =
-                        pipeline_auxiliary_lists.get(&draw_list.pipeline_id)
-                                                .expect("No auxiliary lists for pipeline?!");
+            let DrawListItemIndex(index) = item.item_index;
+            let display_item = &draw_list.items[index as usize];
 
-                    // Handle border radius for complex clipping regions.
-                    for complex_clip_region in
-                            auxiliary_lists.complex_clip_regions(&display_item.clip.complex) {
-                        resource_list.add_radius_raster_for_border_radii(
-                            &complex_clip_region.radii);
-                    }
-
-                    match display_item.item {
-                        SpecificDisplayItem::Image(ref info) => {
-                            resource_list.add_image(info.image_key, info.image_rendering);
-                        }
-                        SpecificDisplayItem::Text(ref info) => {
-                            let glyphs = auxiliary_lists.glyph_instances(&info.glyphs);
-                            for glyph in glyphs {
-                                let glyph = Glyph::new(info.size, info.blur_radius, glyph.index);
-                                resource_list.add_glyph(info.font_key, glyph);
-                            }
-                        }
-                        SpecificDisplayItem::WebGL(..) => {}
-                        SpecificDisplayItem::Rectangle(..) => {}
-                        SpecificDisplayItem::Gradient(..) => {}
-                        SpecificDisplayItem::BoxShadow(ref info) => {
-                            resource_list.add_radius_raster_for_border_radii(
-                                &BorderRadius::uniform(info.border_radius));
-
-                            let box_rect = batch_builder::compute_box_shadow_rect(&info.box_bounds,
-                                                                                  &info.offset,
-                                                                                  info.spread_radius);
-                            resource_list.add_box_shadow_corner(info.blur_radius,
-                                                                info.border_radius,
-                                                                &box_rect,
-                                                                false);
-                            resource_list.add_box_shadow_edge(info.blur_radius,
-                                                              info.border_radius,
-                                                              &box_rect,
-                                                              false);
-                            if info.clip_mode == BoxShadowClipMode::Inset {
-                                resource_list.add_box_shadow_corner(info.blur_radius,
-                                                                    info.border_radius,
-                                                                    &box_rect,
-                                                                    true);
-                                resource_list.add_box_shadow_edge(info.blur_radius,
-                                                                  info.border_radius,
-                                                                  &box_rect,
-                                                                  true);
-                            }
-                        }
-                        SpecificDisplayItem::Border(ref info) => {
-                            let can_tessellate = tessellator::can_tessellate_border(info);
-                            add_border_radius_raster(&info.radius.top_left,
-                                                     &info.top_left_inner_radius(),
-                                                     can_tessellate,
-                                                     resource_cache,
-                                                     &mut resource_list);
-                            add_border_radius_raster(&info.radius.top_right,
-                                                     &info.top_right_inner_radius(),
-                                                     can_tessellate,
-                                                     resource_cache,
-                                                     &mut resource_list);
-                            add_border_radius_raster(&info.radius.bottom_right,
-                                                     &info.bottom_right_inner_radius(),
-                                                     can_tessellate,
-                                                     resource_cache,
-                                                     &mut resource_list);
-                            add_border_radius_raster(&info.radius.bottom_left,
-                                                     &info.bottom_left_inner_radius(),
-                                                     can_tessellate,
-                                                     resource_cache,
-                                                     &mut resource_list);
-
-                            if info.top.style == BorderStyle::Dotted {
-                                resource_list.add_radius_raster(&Size2D::new(info.top.width / 2.0,
-                                                                             info.top.width / 2.0),
-                                                                &Size2D::new(0.0, 0.0),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::RGBA8);
-                            }
-                            if info.right.style == BorderStyle::Dotted {
-                                resource_list.add_radius_raster(&Size2D::new(info.right.width / 2.0,
-                                                                             info.right.width / 2.0),
-                                                                &Size2D::new(0.0, 0.0),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::RGBA8);
-                            }
-                            if info.bottom.style == BorderStyle::Dotted {
-                                resource_list.add_radius_raster(&Size2D::new(info.bottom.width / 2.0,
-                                                                             info.bottom.width / 2.0),
-                                                                &Size2D::new(0.0, 0.0),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::RGBA8);
-                            }
-                            if info.left.style == BorderStyle::Dotted {
-                                resource_list.add_radius_raster(&Size2D::new(info.left.width / 2.0,
-                                                                             info.left.width / 2.0),
-                                                                &Size2D::new(0.0, 0.0),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::RGBA8);
-                            }
-
-                            if info.top.style == BorderStyle::Double {
-                                resource_list.add_radius_raster(&info.radius.top_left,
-                                                                &Size2D::zero(),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::A8);
-
-                                resource_list.add_radius_raster(&Size2D::zero(),
-                                                                &info.top_left_inner_radius(),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::A8);
-                            }
-                            if info.right.style == BorderStyle::Double {
-                                resource_list.add_radius_raster(&info.radius.top_right,
-                                                                &Size2D::zero(),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::A8);
-
-                                resource_list.add_radius_raster(&Size2D::zero(),
-                                                                &info.top_right_inner_radius(),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::A8);
-                            }
-                            if info.bottom.style == BorderStyle::Double {
-                                resource_list.add_radius_raster(&info.radius.bottom_left,
-                                                                &Size2D::zero(),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::A8);
-
-                                resource_list.add_radius_raster(&Size2D::zero(),
-                                                                &info.bottom_left_inner_radius(),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::A8);
-                            }
-                            if info.left.style == BorderStyle::Double {
-                                resource_list.add_radius_raster(&info.radius.bottom_right,
-                                                                &Size2D::zero(),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::A8);
-
-                                resource_list.add_radius_raster(&Size2D::zero(),
-                                                                &info.bottom_right_inner_radius(),
-                                                                false,
-                                                                None,
-                                                                ImageFormat::A8);
-                            }
-
-
-                        }
+            match display_item.item {
+                SpecificDisplayItem::Image(ref info) => {
+                    resource_list.add_image(info.image_key, info.image_rendering);
+                }
+                SpecificDisplayItem::Text(ref info) => {
+                    let glyphs = auxiliary_lists.glyph_instances(&info.glyphs);
+                    for glyph in glyphs {
+                        let glyph = Glyph::new(info.size, info.blur_radius, glyph.index);
+                        resource_list.add_glyph(info.font_key, glyph);
                     }
                 }
+                SpecificDisplayItem::BoxShadow(ref info) => {
+                    let box_rect = batch_builder::compute_box_shadow_rect(&info.box_bounds,
+                                                                          &info.offset,
+                                                                          info.spread_radius);
+                    resource_list.add_box_shadow_corner(info.blur_radius,
+                                                        info.border_radius,
+                                                        &box_rect,
+                                                        false);
+                    resource_list.add_box_shadow_edge(info.blur_radius,
+                                                      info.border_radius,
+                                                      &box_rect,
+                                                      false);
+                    if info.clip_mode == BoxShadowClipMode::Inset {
+                        resource_list.add_box_shadow_corner(info.blur_radius,
+                                                            info.border_radius,
+                                                            &box_rect,
+                                                            true);
+                        resource_list.add_box_shadow_edge(info.blur_radius,
+                                                          info.border_radius,
+                                                          &box_rect,
+                                                          true);
+                    }
+                }
+                SpecificDisplayItem::WebGL(..) => {}
+                SpecificDisplayItem::Rectangle(..) => {}
+                SpecificDisplayItem::Gradient(..) => {}
+                SpecificDisplayItem::Border(ref info) => {}
             }
         }
 
@@ -363,3 +240,4 @@ fn add_border_radius_raster(outer_radius: &Size2D<f32>,
     }
 }
 
+*/

@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use byteorder::{LittleEndian, ReadBytesExt};
+use euclid::Size2D;
 use frame::Frame;
 use internal_types::{FontTemplate, ResultMsg, RendererFrame};
 use ipc_channel::ipc::{IpcBytesReceiver, IpcBytesSender, IpcReceiver};
@@ -53,7 +54,9 @@ impl RenderBackend {
                texture_cache: TextureCache,
                enable_aa: bool,
                notifier: Arc<Mutex<Option<Box<RenderNotifier>>>>,
-               webrender_context_handle: Option<NativeGLContextHandle>) -> RenderBackend {
+               webrender_context_handle: Option<NativeGLContextHandle>,
+               max_ubo_size: usize,
+               tile_size: Size2D<i32>) -> RenderBackend {
         let mut thread_pool = scoped_threadpool::Pool::new(8);
 
         let resource_cache = ResourceCache::new(&mut thread_pool,
@@ -72,7 +75,7 @@ impl RenderBackend {
             device_pixel_ratio: device_pixel_ratio,
             resource_cache: resource_cache,
             scene: Scene::new(),
-            frame: Frame::new(),
+            frame: Frame::new(max_ubo_size, tile_size),
             next_namespace_id: IdNamespace(1),
             notifier: notifier,
             webrender_context_handle: webrender_context_handle,
@@ -208,6 +211,8 @@ impl RenderBackend {
                         ApiMsg::Scroll(delta, cursor, move_phase) => {
                             let frame = profile_counters.total_time.profile(|| {
                                 self.frame.scroll(delta, cursor, move_phase);
+
+                                self.build_scene();
                                 self.render()
                             });
 
@@ -222,6 +227,8 @@ impl RenderBackend {
                             self.publish_frame(frame, &mut profile_counters);
                         }
                         ApiMsg::TranslatePointToLayerSpace(point, tx) => {
+                                    tx.send(point).unwrap()
+/*
                             // TODO(pcwalton): Select other layers for mouse events.
                             let point = point / self.device_pixel_ratio;
                             match self.scene.root_pipeline_id {
@@ -236,7 +243,7 @@ impl RenderBackend {
                                 None => {
                                     tx.send(point).unwrap()
                                 }
-                            }
+                            }*/
                         }
                         ApiMsg::RequestWebGLContext(size, attributes, tx) => {
                             if let Some(ref handle) = self.webrender_context_handle {
