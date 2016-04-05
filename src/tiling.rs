@@ -74,8 +74,6 @@ fn normalize(v: vec3) -> vec3 {
         z: v.z * inv_len,
     };
 
-    //println!("normalize {:?} -> {:?} -> {:?}", v, inv_len, r);
-
     r
 }
 
@@ -131,8 +129,6 @@ fn untransform(r: vec3, n: vec3, a: vec3, inv_transform: &Matrix4) -> Point4D<f3
     let c = add(p, mul(d, t));// mix(p, d, t);
 
     let out = inv_transform.transform_point4d(&Point4D::new(c.x, c.y, c.z, 1.0));
-
-//    println!("untransform r={:?} n={:?} a={:?} -> t={:?} c={:?} -> {:?}", r, n, a, t, c, out);
 
     out
 }
@@ -743,19 +739,21 @@ impl PrimitiveBuffer {
         println!("PB: total prims = {}", self.rectangles.len() + self.clips.len() + self.images.len() + self.gradients.len() + self.texts.len());
     }
 
-    fn get_xf_rect(&self, primitive_key: &PrimitiveKey) -> &TransformedRect {
+    fn get_xf_rect_and_opacity(&self, primitive_key: &PrimitiveKey) -> (&TransformedRect, bool) {
         match primitive_key {
             &PrimitiveKey::Rectangle(index) => {
                 let RectanglePrimitiveIndex(index) = index;
-                &self.rectangles[index as usize].xf_rect
+                let rect = &self.rectangles[index as usize];
+                (&rect.xf_rect, rect.packed.color.a == 1.0)
             }
             &PrimitiveKey::Text(index) => {
                 let TextPrimitiveIndex(index) = index;
-                &self.texts[index as usize].xf_rect
+                (&self.texts[index as usize].xf_rect, false)
             }
             &PrimitiveKey::Image(index) => {
                 let ImagePrimitiveIndex(index) = index;
-                &self.images[index as usize].xf_rect
+                let image = &self.images[index as usize];
+                (&image.xf_rect, false)
             }
             _ => {
                 panic!("todo");
@@ -965,7 +963,7 @@ pub struct Tile {
     pub screen_rect: Rect<i32>,
     layers: Vec<TileLayer>,
     pub prim_count: usize,
-    //children: Vec<Tile>,
+    children: Vec<Tile>,
 
     required_layers: HashSet<LayerTemplateIndex, BuildHasherDefault<FnvHasher>>,
     required_rects: HashSet<RectanglePrimitiveIndex, BuildHasherDefault<FnvHasher>>,
@@ -982,7 +980,7 @@ impl Tile {
         Tile {
             screen_rect: screen_rect,
             layers: Vec::new(),
-            //children: Vec::new(),
+            children: Vec::new(),
             prim_count: 0,
 
             required_layers: HashSet::with_hasher(Default::default()),
@@ -1000,10 +998,21 @@ impl Tile {
                      primitive_key: PrimitiveKey,
                      layer_index: LayerTemplateIndex,
                      primitives: &PrimitiveBuffer,
-                     text_buffer: &mut TextBuffer) {
-        //let xf_rect = primitives.get_xf_rect(&primitive_key);
+                     /*text_buffer: &mut TextBuffer*/) {
+        let (xf_rect, is_opaque) = primitives.get_xf_rect_and_opacity(&primitive_key);
 
-        //if xf_rect.screen_rect.intersects(&self.screen_rect) {
+        if xf_rect.screen_rect.intersects(&self.screen_rect) {
+
+            // Check if this primitive supercedes all existing primitives in this
+            // tile - this is a very important optimization to allow the CPU to create
+            // small tiles that can use the simple tiling pass shader.
+            // TODO(gw): This doesn't work with 3d transforms (it assumes axis aligned rects for now)!!
+            if is_opaque &&
+               xf_rect.screen_rect.contains(&self.screen_rect.origin) &&
+               xf_rect.screen_rect.contains(&self.screen_rect.bottom_right()) {
+                self.layers.clear();
+            }
+
             let need_new_layer = self.layers.is_empty() ||
                                  self.layers.last().unwrap().layer_index != layer_index;
 
@@ -1014,6 +1023,7 @@ impl Tile {
             self.layers.last_mut().unwrap().primitives.push(primitive_key);
             self.prim_count += 1;
 
+/*
             match primitive_key {
                 PrimitiveKey::Rectangle(index) => {
                     self.required_rects.insert(index);
@@ -1039,38 +1049,38 @@ impl Tile {
                     //self.required_glyphs.insert(text_prim.glyph_index);
                     self.required_texts.insert(index);
                 }
-            }
-        //}
+            }*/
+        }
     }
 
-/*
     fn split_if_needed(&mut self,
                        primitives: &PrimitiveBuffer,
                        text_buffer: &mut TextBuffer) {
-        let do_split = self.screen_rect.size.width > 50 &&
-                       self.screen_rect.size.height > 50 &&
-                       self.prim_count > 5;
+        let try_split = self.screen_rect.size.width > 15 &&
+                        self.screen_rect.size.height > 15 &&
+                        self.prim_count > 4;
 
-        if do_split {
-            let (left_rect, right_rect) = if self.screen_rect.size.width > self.screen_rect.size.height {
-                let new_width = self.screen_rect.size.width / 2;
-                let left = Rect::new(self.screen_rect.origin, Size2D::new(new_width, self.screen_rect.size.height));
-                let right = Rect::new(self.screen_rect.origin + Point2D::new(new_width, 0),
-                                      Size2D::new(self.screen_rect.size.width - new_width, self.screen_rect.size.height));
-                (left, right)
-            } else {
-                let new_height = self.screen_rect.size.height / 2;
-                let left = Rect::new(self.screen_rect.origin, Size2D::new(self.screen_rect.size.width, new_height));
-                let right = Rect::new(self.screen_rect.origin + Point2D::new(0, new_height),
-                                      Size2D::new(self.screen_rect.size.width, self.screen_rect.size.height - new_height));
-                (left, right)
-            };
+        if try_split {
+            let new_width = self.screen_rect.size.width / 2;
+            let left_rect = Rect::new(self.screen_rect.origin, Size2D::new(new_width, self.screen_rect.size.height));
+            let right_rect = Rect::new(self.screen_rect.origin + Point2D::new(new_width, 0),
+                                       Size2D::new(self.screen_rect.size.width - new_width, self.screen_rect.size.height));
+
+            let new_height = self.screen_rect.size.height / 2;
+            let top_rect = Rect::new(self.screen_rect.origin, Size2D::new(self.screen_rect.size.width, new_height));
+            let bottom_rect = Rect::new(self.screen_rect.origin + Point2D::new(0, new_height),
+                                        Size2D::new(self.screen_rect.size.width, self.screen_rect.size.height - new_height));
 
             let mut left = Tile::new(left_rect);
             let mut right = Tile::new(right_rect);
 
-            for mut layer in self.layers.drain(..) {
-                for prim_key in layer.primitives.drain(..) {
+            let mut top = Tile::new(top_rect);
+            let mut bottom = Tile::new(bottom_rect);
+
+            for layer in &self.layers {
+                for prim_key in &layer.primitives {
+                    let prim_key = *prim_key;
+
                     left.add_primitive(prim_key,
                                        layer.layer_index,
                                        primitives);
@@ -1078,52 +1088,73 @@ impl Tile {
                     right.add_primitive(prim_key,
                                         layer.layer_index,
                                         primitives);
+
+                    top.add_primitive(prim_key,
+                                      layer.layer_index,
+                                      primitives);
+
+                    bottom.add_primitive(prim_key,
+                                         layer.layer_index,
+                                         primitives);
                 }
             }
 
-            self.children.push(left);
-            self.children.push(right);
-            self.prim_count = 0;
+            // TODO(gw): Investigate different heuristics for selecting which axis
+            //           to do the split on!
+            let h_min = cmp::min(left.prim_count, right.prim_count);
+            let v_min = cmp::min(top.prim_count, bottom.prim_count);
 
-            for child in &mut self.children {
-                child.split_if_needed(primitives, text_buffer);
+            if h_min < self.prim_count || v_min < self.prim_count {
+                self.layers.clear();
+                self.prim_count = 0;
+
+                if h_min < v_min {
+                    self.children.push(left);
+                    self.children.push(right);
+                } else {
+                    self.children.push(top);
+                    self.children.push(bottom);
+                }
+
+                for child in &mut self.children {
+                    child.split_if_needed(primitives, text_buffer);
+                }
             }
-        } else {
-            for layer in &self.layers {
-                self.required_layers.insert(layer.layer_index);
+        }
 
-                for primitive_key in &layer.primitives {
-                    match *primitive_key {
-                        PrimitiveKey::Rectangle(index) => {
-                            self.required_rects.insert(index);
-                        }
-                        PrimitiveKey::SetClip(index) => {
-                            self.required_clips.insert(index);
-                        }
-                        PrimitiveKey::ClearClip(index) => {
-                            // Already handled by matching SetClip
-                        }
-                        PrimitiveKey::Image(index) => {
-                            self.required_images.insert(index);
-                        }
-                        PrimitiveKey::Gradient(index) => {
-                            let gradient_prim = primitives.get_gradient(index);
-                            self.required_gradient_stops.insert(gradient_prim.stops_index);
-                            self.required_gradients.insert(index);
-                        }
-                        PrimitiveKey::Text(index) => {
-                            let text_prim = primitives.get_text(index);
-                            let glyph_prim = primitives.get_glyph(text_prim.glyph_index);
-                            text_buffer.push_text(index, &text_prim.xf_rect.local_rect, glyph_prim);
-                            //self.required_glyphs.insert(text_prim.glyph_index);
-                            self.required_texts.insert(index);
-                        }
+        for layer in &self.layers {
+            self.required_layers.insert(layer.layer_index);
+
+            for primitive_key in &layer.primitives {
+                match *primitive_key {
+                    PrimitiveKey::Rectangle(index) => {
+                        self.required_rects.insert(index);
+                    }
+                    PrimitiveKey::SetClip(index) => {
+                        self.required_clips.insert(index);
+                    }
+                    PrimitiveKey::ClearClip(index) => {
+                        // Already handled by matching SetClip
+                    }
+                    PrimitiveKey::Image(index) => {
+                        self.required_images.insert(index);
+                    }
+                    PrimitiveKey::Gradient(index) => {
+                        let gradient_prim = primitives.get_gradient(index);
+                        self.required_gradient_stops.insert(gradient_prim.stops_index);
+                        self.required_gradients.insert(index);
+                    }
+                    PrimitiveKey::Text(index) => {
+                        let text_prim = primitives.get_text(index);
+                        let glyph_prim = primitives.get_glyph(text_prim.glyph_index);
+                        text_buffer.push_text(index, &text_prim.xf_rect.local_rect, glyph_prim);
+                        //self.required_glyphs.insert(text_prim.glyph_index);
+                        self.required_texts.insert(index);
                     }
                 }
             }
         }
     }
-*/
 
     fn build(&mut self,
              uniforms: &mut UniformBuffer,
@@ -1181,60 +1212,22 @@ impl Tile {
             }
 */
 
-            /*
-            */
-
             let mut layer_cmd_lists = Vec::new();
-            let mut found_cover = false;
-
-            let mut cc = 0;
-            for tile_layer in self.layers.iter().rev() {
-                cc += 1;
-                for prim_key in tile_layer.primitives.iter().rev() {
-                    cc += 1;
-                }
-            }
-            let debug = false; //cc > 20;
-
-            if debug {
-                println!("tile {:?}", self.screen_rect);
-            }
 
             for tile_layer in self.layers.iter().rev() {
-                if found_cover {
-                    break;
-                }
-
                 let LayerTemplateIndex(layer_index) = tile_layer.layer_index;
                 let layer_template = &layer_templates[layer_index as usize].packed;
 
                 let packed_layer_index = uniforms.layer_ubo.maybe_insert_and_get_index(tile_layer.layer_index,
                                                                                       layer_template);
 
-                if debug {
-                    println!("\tstart layer {:?} {:?}", layer_template.p0, layer_template.p1);
-                }
-
                 let mut cmds_for_this_layer = Vec::new();
                 cmds_for_this_layer.push(PackedCommand::new(Command::SetLayer, packed_layer_index));
 
                 for prim_key in tile_layer.primitives.iter().rev() {
-                    if found_cover {
-                        break;
-                    }
-
                     match prim_key {
                         &PrimitiveKey::Rectangle(index) => {
                             let rect_prim = primitives.get_rect(index);
-                            if debug {
-                                println!("\t\t{:?}", rect_prim);
-                            }
-                            if rect_prim.packed.color.a == 1.0 &&
-                               rect_prim.xf_rect.screen_rect.contains(&self.screen_rect.origin) &&
-                               rect_prim.xf_rect.screen_rect.contains(&self.screen_rect.bottom_right()) {
-                                //println!("skip!!");
-                                found_cover = true;
-                            }
                             let rect_index = uniforms.rect_ubo.maybe_insert_and_get_index(index, &rect_prim.packed);
                             //println!("\t\t\trect {:?}", rect_prim.packed);
                             cmds_for_this_layer.push(PackedCommand::new(Command::DrawRectangle, rect_index));
@@ -1255,9 +1248,6 @@ impl Tile {
                         }
                         &PrimitiveKey::Image(index) => {
                             let image_prim = primitives.get_image(index);
-                            if debug {
-                                println!("\t\t{:?}", image_prim);
-                            }
                             let image_index = uniforms.image_ubo.maybe_insert_and_get_index(index, &image_prim.packed);
                             //println!("\t\t\timage {:?}", image_prim.packed);
                             cmds_for_this_layer.push(PackedCommand::new(Command::DrawImage, image_index));
@@ -1280,9 +1270,6 @@ impl Tile {
                         }
                         &PrimitiveKey::Text(index) => {
                             let text_prim = primitives.get_text(index);
-                            if debug {
-                                println!("\t\t{:?}", text_prim);
-                            }
                             let glyph_prim = primitives.get_glyph(text_prim.glyph_index);
 
                             //let glyph_index = uniforms.glyph_ubo.maybe_insert_and_get_index(text_prim.glyph_index,
@@ -1307,10 +1294,6 @@ impl Tile {
                     }
                 }
 
-                if debug {
-                    println!("\tend layer {:?} {:?}", layer_template.p0, layer_template.p1);
-                }
-
                 if cmds_for_this_layer.len() > 1 {
                     layer_cmd_lists.push(cmds_for_this_layer);
                 }
@@ -1326,7 +1309,11 @@ impl Tile {
 
             let cmd_count = uniforms.cmd_ubo.len() - cmd_first_index;
 
-            //println!("cmds = {:?} {} cmds @ {}", uniforms.cmd_ubo, cmd_count, cmd_first_index);
+/*
+            if cmd_count == 5 {
+                println!("{:?} -> cmds = {:?}", self.screen_rect, &uniforms.cmd_ubo[cmd_first_index..cmd_first_index + cmd_count]);
+            }
+*/
 
             let packed_tile = PackedTile {
                 rect: self.screen_rect,
@@ -1345,7 +1332,6 @@ impl Tile {
             packed_tiles.push(packed_tile);
         }
 
-/*
         for child in &mut self.children {
             child.build(uniforms,
                         text_buffer,
@@ -1353,7 +1339,7 @@ impl Tile {
                         layer_templates,
                         max_ubo_size,
                         packed_tiles);
-        }*/
+        }
     }
 }
 
@@ -1364,7 +1350,7 @@ pub struct TileFrame {
     pub tiles: Vec<PackedTile>,
     pub color_texture_id: TextureId,
     pub mask_texture_id: TextureId,
-    pub scroll_offset: Point2D<f32>,
+    //pub scroll_offset: Point2D<f32>,
 }
 
 pub struct TileBuilder {
@@ -1375,10 +1361,11 @@ pub struct TileBuilder {
     device_pixel_ratio: f32,
     color_texture_id: TextureId,
     mask_texture_id: TextureId,
+    scroll_offset: Point2D<f32>,
 }
 
 impl TileBuilder {
-    pub fn new(device_pixel_ratio: f32) -> TileBuilder {
+    pub fn new(device_pixel_ratio: f32, scroll_offset: Point2D<f32>) -> TileBuilder {
         TileBuilder {
             layer_templates: Vec::new(),
             layer_instances: Vec::new(),
@@ -1387,6 +1374,7 @@ impl TileBuilder {
             device_pixel_ratio: device_pixel_ratio,
             color_texture_id: TextureId(0),
             mask_texture_id: TextureId(0),
+            scroll_offset: scroll_offset,
         }
     }
 
@@ -1654,9 +1642,12 @@ impl TileBuilder {
                       rect: Rect<f32>,
                       transform: Matrix4,
                       opacity: f32) {
-        let layer_rect = transform_rect(&rect, &transform);
+        // TODO(gw): Not 3d transform correct!
+        let transform = transform.translate(self.scroll_offset.x,
+                                            self.scroll_offset.y,
+                                            0.0);
 
-        //println!("push_layer {:?} {:?} -> {:?}", rect, transform, layer_rect);
+        let layer_rect = transform_rect(&rect, &transform);
 
         let template = LayerTemplate {
             transform: transform,
@@ -1669,21 +1660,6 @@ impl TileBuilder {
             },
         };
 
-/*
-        let a = vec3::from_point_4d(&layer_rect.vertices[0]);
-        let b = vec3::from_point_4d(&layer_rect.vertices[3]);
-        let c = vec3::from_point_4d(&layer_rect.vertices[2]);
-        let n = normalize(cross(sub(b,a), sub(c,a)));
-
-        println!("n = {:?}", n);
-
-        let aPosition = vec3::new(0.0, 0.0, 0.0);
-        let local_pos = untransform(aPosition, n, a, &template.packed.inv_transform);
-
-        let aPosition = vec3::new(1024.0, 1024.0, 0.0);
-        let local_pos = untransform(aPosition, n, a, &template.packed.inv_transform);
-*/
-
         self.layer_stack.push(LayerTemplateIndex(self.layer_templates.len() as u32));
         self.layer_templates.push(template);
     }
@@ -1695,90 +1671,44 @@ impl TileBuilder {
     // TODO(gw): This is grossly inefficient! But it should allow us to check the GPU
     //           perf on real world pages / demos, then we can worry about the CPU perf...
     pub fn build(&self,
-                 viewport_rect: Rect<i32>,
+                 viewport_size: Size2D<i32>,
                  tile_size: Size2D<i32>,
                  max_ubo_size: usize) -> TileFrame {
-
-        // TODO(gw) Can relax this later, but simplifies things for now.
-        debug_assert!(viewport_rect.size.width % tile_size.width == 0);
-        debug_assert!(viewport_rect.size.height % tile_size.height == 0);
-
-        let x_tile_count = viewport_rect.size.width / tile_size.width;
-        let y_tile_count = viewport_rect.size.height / tile_size.height;
-
-        let mut tiles = Vec::with_capacity((x_tile_count * y_tile_count) as usize);
-        for y in 0..y_tile_count {
-            for x in 0..x_tile_count {
-                let position = Point2D::new(x * tile_size.width, y * tile_size.height);
-                let tile = Tile::new(Rect::new(position, tile_size));
-                tiles.push(tile);
-            }
-        }
-
         let mut text_buffer = TextBuffer::new(TEXT_TARGET_SIZE);
-        let mut vis_count = 0;
 
+        let mut root_tile = Tile::new(Rect::new(Point2D::zero(), viewport_size));
         for layer_instance in &self.layer_instances {
             for primitive_key in &layer_instance.primitives {
-                let xf_rect = self.primitives.get_xf_rect(&primitive_key);
-
-                let x0 = viewport_rect.origin.x + xf_rect.screen_rect.origin.x;
-                let y0 = viewport_rect.origin.y + xf_rect.screen_rect.origin.y;
-                let x1 = x0 + xf_rect.screen_rect.size.width;
-                let y1 = y0 + xf_rect.screen_rect.size.height;
-
-                let tile_x0 = x0 / tile_size.width;
-                let tile_y0 = y0 / tile_size.height;
-                let tile_x1 = (x1 + tile_size.width - 1) / tile_size.width;
-                let tile_y1 = (y1 + tile_size.height - 1) / tile_size.height;
-
-                let tile_x0 = clamp(0, tile_x0, x_tile_count);
-                let tile_x1 = clamp(0, tile_x1, x_tile_count);
-                let tile_y0 = clamp(0, tile_y0, y_tile_count);
-                let tile_y1 = clamp(0, tile_y1, y_tile_count);
-
-                for y in tile_y0..tile_y1 {
-                    for x in tile_x0..tile_x1 {
-                        if x == tile_x0 && y == tile_y0 {
-                            vis_count += 1;
-                        }
-                        let tile = &mut tiles[(y * x_tile_count + x) as usize];
-
-                        tile.add_primitive(*primitive_key,
-                                           layer_instance.layer_index,
-                                           &self.primitives,
-                                           &mut text_buffer);
-                    }
-                }
+                root_tile.add_primitive(*primitive_key,
+                                        layer_instance.layer_index,
+                                        &self.primitives,
+                                        /*&mut text_buffer*/);
             }
         }
 
-        self.primitives.print_stats();
-        println!("ts={:?} -> {} tiles", tile_size, x_tile_count * y_tile_count);
-        println!("vis_prims = {}", vis_count);
+        root_tile.split_if_needed(&self.primitives,
+                                  &mut text_buffer);
 
         // Build UBO batches for each tile
         let mut packed_tiles = Vec::new();
         let mut uniforms = UniformBuffer::new(max_ubo_size);
-        for tile in &mut tiles {
-            tile.build(&mut uniforms,
-                       &text_buffer,
-                       &self.primitives,
-                       &self.layer_templates,
-                       max_ubo_size,
-                       &mut packed_tiles);
-        }
+        root_tile.build(&mut uniforms,
+                        &text_buffer,
+                        &self.primitives,
+                        &self.layer_templates,
+                        max_ubo_size,
+                        &mut packed_tiles);
         uniforms.finalize();
 
         TileFrame {
             uniforms: uniforms,
             text_buffer: text_buffer,
-            viewport_size: viewport_rect.size,
+            viewport_size: viewport_size,
             tiles: packed_tiles,
             color_texture_id: self.color_texture_id,
             mask_texture_id: self.mask_texture_id,
-            scroll_offset: Point2D::new(-viewport_rect.origin.x as f32,
-                                        -viewport_rect.origin.y as f32),
+            //scroll_offset: Point2D::new(-viewport_rect.origin.x as f32,
+            //                            -viewport_rect.origin.y as f32),
         }
     }
 }

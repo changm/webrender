@@ -821,7 +821,8 @@ impl Frame {
                         pipeline_id: root_pipeline_id,
                     };
 
-                    let mut tile_builder = TileBuilder::new(device_pixel_ratio);
+                    let mut tile_builder = TileBuilder::new(device_pixel_ratio, Point2D::new(self.scroll_offset.x as f32,
+                                                                                             self.scroll_offset.y as f32));
                     tile_builder.push_layer(root_stacking_context.stacking_context.bounds,
                                             Matrix4::identity(),
                                             1.0);
@@ -1463,7 +1464,7 @@ impl Frame {
 
     fn build_frame(&mut self) -> RendererFrame {
         let tile_frame = self.tile_builder.as_ref().map(|tile_builder| {
-            tile_builder.build(Rect::new(self.scroll_offset, self.viewport_size),
+            tile_builder.build(self.viewport_size,
                                self.tile_size,
                                self.max_ubo_size)
         });

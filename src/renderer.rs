@@ -104,11 +104,11 @@ impl TileBatch {
        //current_glyph_ubo == glyph_ubos[tile.glyph_ubo_index];
     }
 
-    fn add_tile(&mut self, tile: &PackedTile, offset: Point2D<f32>) {
+    fn add_tile(&mut self, tile: &PackedTile) {
         self.instances.push(TileBatchInstance {
             cmd_index: tile.cmd_index as u32,
             cmd_count: tile.cmd_count as u32,
-            scroll_offset: offset,
+            scroll_offset: Point2D::zero(),
             rect: Rect::new(Point2D::new(tile.rect.origin.x as f32, tile.rect.origin.y as f32),
                             Size2D::new(tile.rect.size.width as f32, tile.rect.size.height as f32)),
         });
@@ -497,8 +497,8 @@ impl Renderer {
 
         let x0 = 0.0;
         let y0 = 0.0;
-        let x1 = options.tile_size.width as f32;
-        let y1 = options.tile_size.height as f32;
+        let x1 = 1.0;//options.tile_size.width as f32;
+        let y1 = 1.0;//options.tile_size.height as f32;
 
         let quad_indices: [u16; 6] = [ 0, 1, 2, 2, 3, 1 ];
         let quad_vertices = [
@@ -2170,7 +2170,7 @@ impl Renderer {
             }
 
             let batch = tile_batches.last_mut().unwrap();
-            batch.add_tile(tile, tile_frame.scroll_offset);
+            batch.add_tile(tile);
 
             if self.enable_profiler {
                 let tile_x0 = tile.rect.origin.x as f32;
