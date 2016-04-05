@@ -133,6 +133,14 @@ fn untransform(r: vec3, n: vec3, a: vec3, inv_transform: &Matrix4) -> Point4D<f3
     out
 }
 
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct TechniqueParams {
+    pub layer_count: usize,
+    pub rect_count: usize,
+    pub image_count: usize,
+    pub text_count: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextRun {
     pub glyphs: Vec<PackedGlyph>,
@@ -593,7 +601,6 @@ pub struct PackedLayer {
 #[derive(Debug)]
 pub struct PackedTile {
     pub rect: Rect<i32>,
-    //pub position: Point2D<i32>,
     pub rect_ubo_index: usize,
     pub layer_ubo_index: usize,
     pub clip_ubo_index: usize,
@@ -601,9 +608,9 @@ pub struct PackedTile {
     pub gradient_ubo_index: usize,
     pub gradient_stop_ubo_index: usize,
     pub text_ubo_index: usize,
-    //pub glyph_ubo_index: usize,
     pub cmd_index: usize,
     pub cmd_count: usize,
+    pub technique_params: TechniqueParams,
 }
 
 #[derive(Debug)]
@@ -1214,6 +1221,13 @@ impl Tile {
 
             let mut layer_cmd_lists = Vec::new();
 
+            let mut technique_params = TechniqueParams {
+                layer_count: self.layers.len(),
+                text_count: 0,
+                image_count: 0,
+                rect_count: 0,
+            };
+
             for tile_layer in self.layers.iter().rev() {
                 let LayerTemplateIndex(layer_index) = tile_layer.layer_index;
                 let layer_template = &layer_templates[layer_index as usize].packed;
@@ -1227,6 +1241,7 @@ impl Tile {
                 for prim_key in tile_layer.primitives.iter().rev() {
                     match prim_key {
                         &PrimitiveKey::Rectangle(index) => {
+                            technique_params.rect_count += 1;
                             let rect_prim = primitives.get_rect(index);
                             let rect_index = uniforms.rect_ubo.maybe_insert_and_get_index(index, &rect_prim.packed);
                             //println!("\t\t\trect {:?}", rect_prim.packed);
@@ -1247,6 +1262,7 @@ impl Tile {
                             cmds_for_this_layer.push(PackedCommand::new(Command::ClearClip, clip_index));
                         }
                         &PrimitiveKey::Image(index) => {
+                            technique_params.image_count += 1;
                             let image_prim = primitives.get_image(index);
                             let image_index = uniforms.image_ubo.maybe_insert_and_get_index(index, &image_prim.packed);
                             //println!("\t\t\timage {:?}", image_prim.packed);
@@ -1269,6 +1285,7 @@ impl Tile {
                             cmds_for_this_layer.push(PackedCommand::new(Command::DrawGradient, gradient_index));
                         }
                         &PrimitiveKey::Text(index) => {
+                            technique_params.text_count += 1;
                             let text_prim = primitives.get_text(index);
                             let glyph_prim = primitives.get_glyph(text_prim.glyph_index);
 
@@ -1324,9 +1341,9 @@ impl Tile {
                 gradient_ubo_index: uniforms.gradient_ubos.len(),
                 gradient_stop_ubo_index: uniforms.gradient_stop_ubos.len(),
                 text_ubo_index: uniforms.text_ubos.len(),
-                //glyph_ubo_index: uniforms.glyph_ubos.len(),
                 cmd_index: cmd_first_index,
                 cmd_count: cmd_count,
+                technique_params: technique_params,
             };
 
             packed_tiles.push(packed_tile);

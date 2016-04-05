@@ -30,7 +30,7 @@ use std::thread;
 use std::usize;
 use tessellator::BorderCornerTessellation;
 use texture_cache::{BorderType, TextureCache, TextureInsertOp};
-use tiling::{self, PackedCommand, TileFrame, TextBuffer, PackedTile};
+use tiling::{self, PackedCommand, TileFrame, TextBuffer, PackedTile, TechniqueParams};
 use time::precise_time_ns;
 use webrender_traits::{ColorF, Epoch, PipelineId, RenderNotifier};
 use webrender_traits::{ImageFormat, MixBlendMode, RenderApiSender};
@@ -62,7 +62,8 @@ const GL_BLEND_MAX: gl::GLuint = gl::FUNC_ADD;
 struct TileBatchInstance {
     cmd_index: u32,
     cmd_count: u32,
-    scroll_offset: Point2D<f32>,
+    debug0: f32,
+    debug1: f32,
     rect: Rect<f32>,
 }
 
@@ -104,11 +105,12 @@ impl TileBatch {
        //current_glyph_ubo == glyph_ubos[tile.glyph_ubo_index];
     }
 
-    fn add_tile(&mut self, tile: &PackedTile) {
+    fn add_tile(&mut self, tile: &PackedTile, debug0: f32, debug1: f32) {
         self.instances.push(TileBatchInstance {
             cmd_index: tile.cmd_index as u32,
             cmd_count: tile.cmd_count as u32,
-            scroll_offset: Point2D::zero(),
+            debug0: debug0,
+            debug1: debug1,
             rect: Rect::new(Point2D::new(tile.rect.origin.x as f32, tile.rect.origin.y as f32),
                             Size2D::new(tile.rect.size.width as f32, tile.rect.size.height as f32)),
         });
@@ -354,7 +356,9 @@ pub struct Renderer {
     temporary_fb_texture: TextureId,
     text_composite_target: TextureId,
 
-    //gpu_profile: GpuProfile,
+    gpu_profile_text: GpuProfile,
+    gpu_profile_tiling: GpuProfile,
+    gpu_profile_complex: GpuProfile,
     quad_vao_id: VAOId,
     quad_vao_index_count: gl::GLint,
 }
@@ -642,7 +646,9 @@ impl Renderer {
             temporary_fb_texture: temporary_fb_texture,
             text_composite_target: text_composite_target,
             max_raster_op_size: max_raster_op_size,
-            //gpu_profile: GpuProfile::new(),
+            gpu_profile_text: GpuProfile::new(),
+            gpu_profile_tiling: GpuProfile::new(),
+            gpu_profile_complex: GpuProfile::new(),
             quad_vao_id: quad_vao_id,
             quad_vao_index_count: quad_indices.len() as gl::GLint,
         };
@@ -712,7 +718,11 @@ impl Renderer {
     pub fn render(&mut self, framebuffer_size: Size2D<u32>) {
         let mut profile_timers = RendererProfileTimers::new();
 
-        let gpu_ns = 0;//self.gpu_profile.begin();
+        // Block CPU waiting for last frame's GPU profiles to arrive.
+        // In general this shouldn't block unless heavily GPU limited.
+        let text_ns = self.gpu_profile_text.get();
+        let tiling_ns = self.gpu_profile_tiling.get();
+        let complex_ns = self.gpu_profile_complex.get();
 
         profile_timers.cpu_time.profile(|| {
             self.device.begin_frame();
@@ -731,8 +741,12 @@ impl Renderer {
         let ns = current_time - self.last_time;
         self.profile_counters.frame_time.set(ns);
 
-        //self.gpu_profile.end();
-        profile_timers.gpu_time.set(gpu_ns);
+        profile_timers.gpu_time_text.set(text_ns);
+        profile_timers.gpu_time_tiling.set(tiling_ns);
+        profile_timers.gpu_time_complex.set(complex_ns);
+
+        let gpu_ns = text_ns + tiling_ns + complex_ns;
+        profile_timers.gpu_time_total.set(gpu_ns);
 
         if self.enable_profiler {
             self.profiler.draw_profile(&self.backend_profile_counters,
@@ -2052,6 +2066,23 @@ impl Renderer {
         self.device.delete_vao(vao_id);
     }
 
+    fn select_technique_for_tile(&self, params: &TechniqueParams) -> (f32, f32) {
+        match (params.layer_count, params.rect_count, params.image_count, params.text_count) {
+            (1, _, 0, 0) => {
+                (1.0, 0.0)
+            }
+            (1, 0, _, 0) => {
+                (0.0, 1.0)
+            }
+            (1, 0, 0, _) => {
+                (1.0, 1.0)
+            }
+            _ => {
+                (0.0, 0.0)
+            }
+        }
+    }
+
     fn draw_tile_frame(&mut self,
                        tile_frame: &TileFrame,
                        framebuffer_size: &Size2D<u32>) {
@@ -2062,8 +2093,7 @@ impl Renderer {
                                         ORTHO_NEAR_PLANE,
                                         ORTHO_FAR_PLANE);
 
-        let mut g = GpuProfile::new();
-        g.begin();
+        self.gpu_profile_text.begin();
 
         gl::disable(gl::BLEND);
         gl::depth_mask(false);
@@ -2072,9 +2102,8 @@ impl Renderer {
 
         self.draw_text(&tile_frame.text_buffer, tile_frame.color_texture_id);
 
-        g.end();
-        let text_ns = g.get();
-        g.begin();
+        self.gpu_profile_text.end();
+        self.gpu_profile_tiling.begin();
 
         self.device.bind_render_target(None);
         gl::viewport(0, 0, framebuffer_size.width as i32, framebuffer_size.height as i32);
@@ -2160,6 +2189,8 @@ impl Renderer {
         let mut tile_batches: Vec<TileBatch> = Vec::new();
 
         for (tile_index, tile) in tile_frame.tiles.iter().enumerate() {
+            let debug = self.select_technique_for_tile(&tile.technique_params);
+
             let need_new_batch = match tile_batches.last() {
                 Some(ref batch) => !batch.can_add(tile),
                 None => true,
@@ -2170,7 +2201,7 @@ impl Renderer {
             }
 
             let batch = tile_batches.last_mut().unwrap();
-            batch.add_tile(tile);
+            batch.add_tile(tile, debug.0, debug.1);
 
             if self.enable_profiler {
                 let tile_x0 = tile.rect.origin.x as f32;
@@ -2269,9 +2300,8 @@ impl Renderer {
             self.device.draw_indexed_triangles_instanced_u16(self.quad_vao_index_count, batch.instances.len() as gl::GLint);
         }
 
-        g.end();
-        let tile_ns = g.get();
-        g.begin();
+        self.gpu_profile_tiling.end();
+        self.gpu_profile_complex.begin();
 
         gl::stencil_op(gl::KEEP, gl::KEEP, gl::KEEP);
         gl::stencil_func(gl::EQUAL, 0, 0xff);
@@ -2347,14 +2377,7 @@ impl Renderer {
         gl::delete_buffers(&batch_ubos);
         //gl::delete_buffers(&glyph_ubos);
 
-        g.end();
-        let complex_ns = g.get();
-
-        let text_ms = text_ns as f64 / 1000000.0;
-        let tile_ms = tile_ns as f64 / 1000000.0;
-        let complex_ms = complex_ns as f64 / 1000000.0;
-
-        println!("text={} tile={} complex={}", text_ms, tile_ms, complex_ms);
+        self.gpu_profile_complex.end();
     }
 
     fn draw_frame(&mut self, framebuffer_size: Size2D<u32>) {
