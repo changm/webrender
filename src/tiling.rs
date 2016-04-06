@@ -324,27 +324,33 @@ impl UniformBuffer {
     }
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ClipCorner {
-    position: Point2D<DevicePixel>,
-    outer_radius_x: DevicePixel,
-    outer_radius_y: DevicePixel,
-    inner_radius_x: DevicePixel,
-    inner_radius_y: DevicePixel,
-    padding: Point2D<DevicePixel>,
+    position: Point2D<f32>,
+    outer_radius_x: f32, //DevicePixel,
+    outer_radius_y: f32, //DevicePixel,
+    inner_radius_x: f32, //DevicePixel,
+    inner_radius_y: f32, //DevicePixel,
+    padding: Point2D<f32>,
 }
 
 impl ClipCorner {
     pub fn invalid() -> ClipCorner {
         ClipCorner {
             position: Point2D::zero(),
-            outer_radius_x: DevicePixel::from_u32(0),
-            outer_radius_y: DevicePixel::from_u32(0),
-            inner_radius_x: DevicePixel::from_u32(0),
-            inner_radius_y: DevicePixel::from_u32(0),
+            outer_radius_x: 0.0, //DevicePixel::from_u32(0),
+            outer_radius_y: 0.0, //DevicePixel::from_u32(0),
+            inner_radius_x: 0.0, //DevicePixel::from_u32(0),
+            inner_radius_y: 0.0, //DevicePixel::from_u32(0),
             padding: Point2D::zero(),
         }
     }
+}
+
+#[derive(Debug)]
+pub struct ClipPrimitive {
+    xf_rect: TransformedRect,
+    packed: Clip,
 }
 
 #[derive(Debug, Clone)]
@@ -372,39 +378,39 @@ impl Clip {
         Clip {
             rect: clip.rect,
             top_left: ClipCorner {
-                position: Point2D::new(DevicePixel::new(clip.rect.origin.x + clip.radii.top_left.width, device_pixel_ratio),
-                                       DevicePixel::new(clip.rect.origin.y + clip.radii.top_left.height, device_pixel_ratio)),
-                outer_radius_x: DevicePixel::new(clip.radii.top_left.width, device_pixel_ratio),
-                outer_radius_y: DevicePixel::new(clip.radii.top_left.height, device_pixel_ratio),
-                inner_radius_x: DevicePixel::from_u32(0),
-                inner_radius_y: DevicePixel::from_u32(0),
+                position: Point2D::new(clip.rect.origin.x + clip.radii.top_left.width,
+                                       clip.rect.origin.y + clip.radii.top_left.height),
+                outer_radius_x: clip.radii.top_left.width,
+                outer_radius_y: clip.radii.top_left.height,
+                inner_radius_x: 0.0,
+                inner_radius_y: 0.0,
                 padding: Point2D::zero(),
             },
             top_right: ClipCorner {
-                position: Point2D::new(DevicePixel::new(clip.rect.origin.x + clip.rect.size.width - clip.radii.top_right.width, device_pixel_ratio),
-                                       DevicePixel::new(clip.rect.origin.y + clip.radii.top_right.height, device_pixel_ratio)),
-                outer_radius_x: DevicePixel::new(clip.radii.top_right.width, device_pixel_ratio),
-                outer_radius_y: DevicePixel::new(clip.radii.top_right.height, device_pixel_ratio),
-                inner_radius_x: DevicePixel::from_u32(0),
-                inner_radius_y: DevicePixel::from_u32(0),
+                position: Point2D::new(clip.rect.origin.x + clip.rect.size.width - clip.radii.top_right.width,
+                                       clip.rect.origin.y + clip.radii.top_right.height),
+                outer_radius_x: clip.radii.top_right.width,
+                outer_radius_y: clip.radii.top_right.height,
+                inner_radius_x: 0.0,
+                inner_radius_y: 0.0,
                 padding: Point2D::zero(),
             },
             bottom_left: ClipCorner {
-                position: Point2D::new(DevicePixel::new(clip.rect.origin.x + clip.radii.bottom_left.width, device_pixel_ratio),
-                                       DevicePixel::new(clip.rect.origin.y + clip.rect.size.height - clip.radii.bottom_left.height, device_pixel_ratio)),
-                outer_radius_x: DevicePixel::new(clip.radii.bottom_left.width, device_pixel_ratio),
-                outer_radius_y: DevicePixel::new(clip.radii.bottom_left.height, device_pixel_ratio),
-                inner_radius_x: DevicePixel::from_u32(0),
-                inner_radius_y: DevicePixel::from_u32(0),
+                position: Point2D::new(clip.rect.origin.x + clip.radii.bottom_left.width,
+                                       clip.rect.origin.y + clip.rect.size.height - clip.radii.bottom_left.height),
+                outer_radius_x: clip.radii.bottom_left.width,
+                outer_radius_y: clip.radii.bottom_left.height,
+                inner_radius_x: 0.0,
+                inner_radius_y: 0.0,
                 padding: Point2D::zero(),
             },
             bottom_right: ClipCorner {
-                position: Point2D::new(DevicePixel::new(clip.rect.origin.x + clip.rect.size.width - clip.radii.bottom_right.width, device_pixel_ratio),
-                                       DevicePixel::new(clip.rect.origin.y + clip.rect.size.height - clip.radii.bottom_right.height, device_pixel_ratio)),
-                outer_radius_x: DevicePixel::new(clip.radii.bottom_right.width, device_pixel_ratio),
-                outer_radius_y: DevicePixel::new(clip.radii.bottom_right.height, device_pixel_ratio),
-                inner_radius_x: DevicePixel::from_u32(0),
-                inner_radius_y: DevicePixel::from_u32(0),
+                position: Point2D::new(clip.rect.origin.x + clip.rect.size.width - clip.radii.bottom_right.width,
+                                       clip.rect.origin.y + clip.rect.size.height - clip.radii.bottom_right.height),
+                outer_radius_x: clip.radii.bottom_right.width,
+                outer_radius_y: clip.radii.bottom_right.height,
+                inner_radius_x: 0.0,
+                inner_radius_y: 0.0,
                 padding: Point2D::zero(),
             },
         }
@@ -417,39 +423,39 @@ impl Clip {
         Clip {
             rect: *rect,
             top_left: ClipCorner {
-                position: Point2D::new(DevicePixel::new(rect.origin.x + outer_radius.top_left.width, device_pixel_ratio),
-                                       DevicePixel::new(rect.origin.y + outer_radius.top_left.height, device_pixel_ratio)),
-                outer_radius_x: DevicePixel::new(outer_radius.top_left.width, device_pixel_ratio),
-                outer_radius_y: DevicePixel::new(outer_radius.top_left.height, device_pixel_ratio),
-                inner_radius_x: DevicePixel::new(inner_radius.top_left.width, device_pixel_ratio),
-                inner_radius_y: DevicePixel::new(inner_radius.top_left.height, device_pixel_ratio),
+                position: Point2D::new(rect.origin.x + outer_radius.top_left.width,
+                                       rect.origin.y + outer_radius.top_left.height),
+                outer_radius_x: outer_radius.top_left.width,
+                outer_radius_y: outer_radius.top_left.height,
+                inner_radius_x: inner_radius.top_left.width,
+                inner_radius_y: inner_radius.top_left.height,
                 padding: Point2D::zero(),
             },
             top_right: ClipCorner {
-                position: Point2D::new(DevicePixel::new(rect.origin.x + rect.size.width - outer_radius.top_right.width, device_pixel_ratio),
-                                       DevicePixel::new(rect.origin.y + outer_radius.top_right.height, device_pixel_ratio)),
-                outer_radius_x: DevicePixel::new(outer_radius.top_right.width, device_pixel_ratio),
-                outer_radius_y: DevicePixel::new(outer_radius.top_right.height, device_pixel_ratio),
-                inner_radius_x: DevicePixel::new(inner_radius.top_right.width, device_pixel_ratio),
-                inner_radius_y: DevicePixel::new(inner_radius.top_right.height, device_pixel_ratio),
+                position: Point2D::new(rect.origin.x + rect.size.width - outer_radius.top_right.width,
+                                       rect.origin.y + outer_radius.top_right.height),
+                outer_radius_x: outer_radius.top_right.width,
+                outer_radius_y: outer_radius.top_right.height,
+                inner_radius_x: inner_radius.top_right.width,
+                inner_radius_y: inner_radius.top_right.height,
                 padding: Point2D::zero(),
             },
             bottom_left: ClipCorner {
-                position: Point2D::new(DevicePixel::new(rect.origin.x + outer_radius.bottom_left.width, device_pixel_ratio),
-                                       DevicePixel::new(rect.origin.y + rect.size.height - outer_radius.bottom_left.height, device_pixel_ratio)),
-                outer_radius_x: DevicePixel::new(outer_radius.bottom_left.width, device_pixel_ratio),
-                outer_radius_y: DevicePixel::new(outer_radius.bottom_left.height, device_pixel_ratio),
-                inner_radius_x: DevicePixel::new(inner_radius.bottom_left.width, device_pixel_ratio),
-                inner_radius_y: DevicePixel::new(inner_radius.bottom_left.height, device_pixel_ratio),
+                position: Point2D::new(rect.origin.x + outer_radius.bottom_left.width,
+                                       rect.origin.y + rect.size.height - outer_radius.bottom_left.height),
+                outer_radius_x: outer_radius.bottom_left.width,
+                outer_radius_y: outer_radius.bottom_left.height,
+                inner_radius_x: inner_radius.bottom_left.width,
+                inner_radius_y: inner_radius.bottom_left.height,
                 padding: Point2D::zero(),
             },
             bottom_right: ClipCorner {
-                position: Point2D::new(DevicePixel::new(rect.origin.x + rect.size.width - outer_radius.bottom_right.width, device_pixel_ratio),
-                                       DevicePixel::new(rect.origin.y + rect.size.height - outer_radius.bottom_right.height, device_pixel_ratio)),
-                outer_radius_x: DevicePixel::new(outer_radius.bottom_right.width, device_pixel_ratio),
-                outer_radius_y: DevicePixel::new(outer_radius.bottom_right.height, device_pixel_ratio),
-                inner_radius_x: DevicePixel::new(inner_radius.bottom_right.width, device_pixel_ratio),
-                inner_radius_y: DevicePixel::new(inner_radius.bottom_right.height, device_pixel_ratio),
+                position: Point2D::new(rect.origin.x + rect.size.width - outer_radius.bottom_right.width,
+                                       rect.origin.y + rect.size.height - outer_radius.bottom_right.height),
+                outer_radius_x: outer_radius.bottom_right.width,
+                outer_radius_y: outer_radius.bottom_right.height,
+                inner_radius_x: inner_radius.bottom_right.width,
+                inner_radius_y: inner_radius.bottom_right.height,
                 padding: Point2D::zero(),
             },
         }
@@ -720,7 +726,7 @@ struct RectanglePrimitive {
 
 struct PrimitiveBuffer {
     rectangles: Vec<RectanglePrimitive>,
-    clips: Vec<Clip>,
+    clips: Vec<ClipPrimitive>,
     images: Vec<ImagePrimitive>,
     gradients: Vec<GradientPrimitive>,
     gradient_stops: Vec<GradientStopPrimitive>,
@@ -760,7 +766,12 @@ impl PrimitiveBuffer {
             &PrimitiveKey::Image(index) => {
                 let ImagePrimitiveIndex(index) = index;
                 let image = &self.images[index as usize];
-                (&image.xf_rect, false)
+                (&image.xf_rect, false)                     // TODO: Check if image is opaque - easy optimization!
+            }
+            &PrimitiveKey::SetClip(index) | &PrimitiveKey::ClearClip(index) => {
+                let ClipPrimitiveIndex(index) = index;
+                let clip = &self.clips[index as usize];
+                (&clip.xf_rect, false)
             }
             _ => {
                 panic!("todo");
@@ -776,11 +787,11 @@ impl PrimitiveBuffer {
             }
             &PrimitiveKey::SetClip(index) => {
                 let ClipPrimitiveIndex(index) = index;
-                &self.clips[index as usize].rect
+                &self.clips[index as usize].xf_rect.local_rect
             }
             &PrimitiveKey::ClearClip(index) => {
                 let ClipPrimitiveIndex(index) = index;
-                &self.clips[index as usize].rect
+                &self.clips[index as usize].xf_rect.local_rect
             }
             &PrimitiveKey::Image(index) => {
                 let ImagePrimitiveIndex(index) = index;
@@ -815,9 +826,13 @@ impl PrimitiveBuffer {
     }
 
     fn add_set_clip(&mut self,
+                    xf_rect: TransformedRect,
                     clip: Clip) -> PrimitiveKey {
         let index = self.clips.len();
-        self.clips.push(clip);
+        self.clips.push(ClipPrimitive {
+            packed: clip,
+            xf_rect: xf_rect,
+        });
         PrimitiveKey::SetClip(ClipPrimitiveIndex(index as u32))
     }
 
@@ -911,7 +926,7 @@ impl PrimitiveBuffer {
         &self.rectangles[index as usize]
     }
 
-    fn get_clip(&self, index: ClipPrimitiveIndex) -> &Clip {
+    fn get_clip(&self, index: ClipPrimitiveIndex) -> &ClipPrimitive {
         let ClipPrimitiveIndex(index) = index;
         &self.clips[index as usize]
     }
@@ -1228,17 +1243,16 @@ impl Tile {
                 rect_count: 0,
             };
 
-            for tile_layer in self.layers.iter().rev() {
+            for tile_layer in &self.layers {
                 let LayerTemplateIndex(layer_index) = tile_layer.layer_index;
                 let layer_template = &layer_templates[layer_index as usize].packed;
 
                 let packed_layer_index = uniforms.layer_ubo.maybe_insert_and_get_index(tile_layer.layer_index,
                                                                                       layer_template);
-
                 let mut cmds_for_this_layer = Vec::new();
                 cmds_for_this_layer.push(PackedCommand::new(Command::SetLayer, packed_layer_index));
 
-                for prim_key in tile_layer.primitives.iter().rev() {
+                for prim_key in &tile_layer.primitives {
                     match prim_key {
                         &PrimitiveKey::Rectangle(index) => {
                             technique_params.rect_count += 1;
@@ -1248,16 +1262,14 @@ impl Tile {
                             cmds_for_this_layer.push(PackedCommand::new(Command::DrawRectangle, rect_index));
                         }
                         &PrimitiveKey::SetClip(index) => {
-                            panic!("todo");
                             let clip_prim = primitives.get_clip(index);
-                            let clip_index = uniforms.clip_ubo.maybe_insert_and_get_index(index, &clip_prim);
+                            let clip_index = uniforms.clip_ubo.maybe_insert_and_get_index(index, &clip_prim.packed);
                             //println!("\t\t\tset clip {:?}", clip_prim);
                             cmds_for_this_layer.push(PackedCommand::new(Command::SetClip, clip_index));
                         }
                         &PrimitiveKey::ClearClip(index) => {
-                            panic!("todo");
                             let clip_prim = primitives.get_clip(index);
-                            let clip_index = uniforms.clip_ubo.maybe_insert_and_get_index(index, &clip_prim);
+                            let clip_index = uniforms.clip_ubo.maybe_insert_and_get_index(index, &clip_prim.packed);
                             //println!("\t\t\tclear clip {:?}", clip_prim);
                             cmds_for_this_layer.push(PackedCommand::new(Command::ClearClip, clip_index));
                         }
@@ -1289,9 +1301,6 @@ impl Tile {
                             let text_prim = primitives.get_text(index);
                             let glyph_prim = primitives.get_glyph(text_prim.glyph_index);
 
-                            //let glyph_index = uniforms.glyph_ubo.maybe_insert_and_get_index(text_prim.glyph_index,
-                            //                                                       &glyph_prim.glyphs);
-
                             let text = text_buffer.get(index);
 
                             let mut packed_text = text_prim.packed.clone();
@@ -1299,9 +1308,6 @@ impl Tile {
                             packed_text.st1 = text.st1;
                             packed_text.p0 = text.rect.origin;
                             packed_text.p1 = text.rect.bottom_right();
-
-                            //packed_text.glyph_start_index = glyph_index as u32;
-                            //packed_text.glyph_end_index = (glyph_index + glyph_prim.glyphs.len()) as u32;
 
                             //println!("\t\t\ttext {:?}", packed_text);
 
@@ -1311,9 +1317,8 @@ impl Tile {
                     }
                 }
 
-                if cmds_for_this_layer.len() > 1 {
-                    layer_cmd_lists.push(cmds_for_this_layer);
-                }
+                debug_assert!(cmds_for_this_layer.len() > 1);
+                layer_cmd_lists.push(cmds_for_this_layer);
             }
 
             let cmd_first_index = uniforms.cmd_ubo.len();
@@ -1326,11 +1331,7 @@ impl Tile {
 
             let cmd_count = uniforms.cmd_ubo.len() - cmd_first_index;
 
-/*
-            if cmd_count == 5 {
-                println!("{:?} -> cmds = {:?}", self.screen_rect, &uniforms.cmd_ubo[cmd_first_index..cmd_first_index + cmd_count]);
-            }
-*/
+            //println!("{:?} -> cmds = {:?}", self.screen_rect, &uniforms.cmd_ubo[cmd_first_index..cmd_first_index + cmd_count]);
 
             let packed_tile = PackedTile {
                 rect: self.screen_rect,
@@ -1642,15 +1643,12 @@ impl TileBuilder {
     }
 
     pub fn set_clip(&mut self, clip: Clip) {
-        return;
-
-        let clip_key = self.primitives.add_set_clip(clip);
+        let xf_rect = self.transform_rect(&clip.rect);
+        let clip_key = self.primitives.add_set_clip(xf_rect, clip);
         self.add_primitive(clip_key);
     }
 
     pub fn clear_clip(&mut self) {
-        return;
-
         let clip_key = self.primitives.add_clear_clip();
         self.add_primitive(clip_key);
     }
