@@ -633,7 +633,7 @@ impl<KEY: Eq + Hash + Copy, TYPE: Clone> Ubo<KEY, TYPE> {
         }
     }
 
-    fn can_fit(&self, keys: &HashSet<KEY, BuildHasherDefault<FnvHasher>>, kind: UboBindLocation, max_ubo_size: usize) -> bool {
+    fn can_fit(&self, keys: &Vec<KEY>, kind: UboBindLocation, max_ubo_size: usize) -> bool {
         let max_item_count = kind.get_array_len(max_ubo_size);
         let new_item_count = keys.iter().filter(|key| !self.map.contains_key(key)).count();
         let item_count = self.items.len() + new_item_count;
@@ -675,7 +675,7 @@ impl<KEY: Eq + Hash + Copy, TYPE: Clone> ArrayUbo<KEY, TYPE> {
     }
 
     fn can_fit<F>(&self,
-                  keys: &HashSet<KEY, BuildHasherDefault<FnvHasher>>,
+                  keys: &Vec<KEY>,
                   kind: UboBindLocation,
                   max_ubo_size: usize,
                   f: F) -> bool
@@ -987,14 +987,13 @@ pub struct Tile {
     pub prim_count: usize,
     children: Vec<Tile>,
 
-    required_layers: HashSet<LayerTemplateIndex, BuildHasherDefault<FnvHasher>>,
-    required_rects: HashSet<RectanglePrimitiveIndex, BuildHasherDefault<FnvHasher>>,
-    required_clips: HashSet<ClipPrimitiveIndex, BuildHasherDefault<FnvHasher>>,
-    required_images: HashSet<ImagePrimitiveIndex, BuildHasherDefault<FnvHasher>>,
-    required_gradients: HashSet<GradientPrimitiveIndex, BuildHasherDefault<FnvHasher>>,
-    required_gradient_stops: HashSet<GradientStopPrimitiveIndex, BuildHasherDefault<FnvHasher>>,
-    //required_glyphs: HashSet<GlyphPrimitiveIndex, BuildHasherDefault<FnvHasher>>,
-    required_texts: HashSet<TextPrimitiveIndex, BuildHasherDefault<FnvHasher>>,
+    required_layers: Vec<LayerTemplateIndex>,
+    required_rects: Vec<RectanglePrimitiveIndex>,
+    required_clips: Vec<ClipPrimitiveIndex>,
+    required_images: Vec<ImagePrimitiveIndex>,
+    required_gradients: Vec<GradientPrimitiveIndex>,
+    required_gradient_stops: Vec<GradientStopPrimitiveIndex>,
+    required_texts: Vec<TextPrimitiveIndex>,
 }
 
 impl Tile {
@@ -1005,22 +1004,20 @@ impl Tile {
             children: Vec::new(),
             prim_count: 0,
 
-            required_layers: HashSet::with_hasher(Default::default()),
-            required_rects: HashSet::with_hasher(Default::default()),
-            required_clips: HashSet::with_hasher(Default::default()),
-            required_images: HashSet::with_hasher(Default::default()),
-            required_gradients: HashSet::with_hasher(Default::default()),
-            required_gradient_stops: HashSet::with_hasher(Default::default()),
-            //required_glyphs: HashSet::with_hasher(Default::default()),
-            required_texts: HashSet::with_hasher(Default::default()),
+            required_layers: Vec::new(),
+            required_rects: Vec::new(),
+            required_clips: Vec::new(),
+            required_images: Vec::new(),
+            required_gradients: Vec::new(),
+            required_gradient_stops: Vec::new(),
+            required_texts: Vec::new(),
         }
     }
 
     fn add_primitive(&mut self,
                      primitive_key: PrimitiveKey,
                      layer_index: LayerTemplateIndex,
-                     primitives: &PrimitiveBuffer,
-                     /*text_buffer: &mut TextBuffer*/) {
+                     primitives: &PrimitiveBuffer) {
         let (xf_rect, is_opaque) = primitives.get_xf_rect_and_opacity(&primitive_key);
 
         if xf_rect.screen_rect.intersects(&self.screen_rect) {
@@ -1044,34 +1041,6 @@ impl Tile {
 
             self.layers.last_mut().unwrap().primitives.push(primitive_key);
             self.prim_count += 1;
-
-/*
-            match primitive_key {
-                PrimitiveKey::Rectangle(index) => {
-                    self.required_rects.insert(index);
-                }
-                PrimitiveKey::SetClip(index) => {
-                    self.required_clips.insert(index);
-                }
-                PrimitiveKey::ClearClip(index) => {
-                    // Already handled by matching SetClip
-                }
-                PrimitiveKey::Image(index) => {
-                    self.required_images.insert(index);
-                }
-                PrimitiveKey::Gradient(index) => {
-                    let gradient_prim = primitives.get_gradient(index);
-                    self.required_gradient_stops.insert(gradient_prim.stops_index);
-                    self.required_gradients.insert(index);
-                }
-                PrimitiveKey::Text(index) => {
-                    let text_prim = primitives.get_text(index);
-                    let glyph_prim = primitives.get_glyph(text_prim.glyph_index);
-                    text_buffer.push_text(index, &text_prim.xf_rect.local_rect, glyph_prim);
-                    //self.required_glyphs.insert(text_prim.glyph_index);
-                    self.required_texts.insert(index);
-                }
-            }*/
         }
     }
 
@@ -1145,33 +1114,33 @@ impl Tile {
         }
 
         for layer in &self.layers {
-            self.required_layers.insert(layer.layer_index);
+            self.required_layers.push(layer.layer_index);
 
             for primitive_key in &layer.primitives {
                 match *primitive_key {
                     PrimitiveKey::Rectangle(index) => {
-                        self.required_rects.insert(index);
+                        self.required_rects.push(index);
                     }
                     PrimitiveKey::SetClip(index) => {
-                        self.required_clips.insert(index);
+                        self.required_clips.push(index);
                     }
                     PrimitiveKey::ClearClip(index) => {
                         // Already handled by matching SetClip
                     }
                     PrimitiveKey::Image(index) => {
-                        self.required_images.insert(index);
+                        self.required_images.push(index);
                     }
                     PrimitiveKey::Gradient(index) => {
                         let gradient_prim = primitives.get_gradient(index);
-                        self.required_gradient_stops.insert(gradient_prim.stops_index);
-                        self.required_gradients.insert(index);
+                        self.required_gradient_stops.push(gradient_prim.stops_index);
+                        self.required_gradients.push(index);
                     }
                     PrimitiveKey::Text(index) => {
                         let text_prim = primitives.get_text(index);
                         let glyph_prim = primitives.get_glyph(text_prim.glyph_index);
                         text_buffer.push_text(index, &text_prim.xf_rect.local_rect, glyph_prim);
                         //self.required_glyphs.insert(text_prim.glyph_index);
-                        self.required_texts.insert(index);
+                        self.required_texts.push(index);
                     }
                 }
             }
