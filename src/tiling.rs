@@ -8,142 +8,412 @@ use device::{TextureId, TextureFilter};
 use euclid::{Point2D, Rect, Matrix4, Size2D, Point4D};
 use fnv::FnvHasher;
 use frame::FrameId;
-use internal_types::{AxisDirection, GlyphKey, DevicePixel, PackedColor};
-use renderer::{BLUR_INFLATION_FACTOR, UboBindLocation, TEXT_TARGET_SIZE};
+use internal_types::{Glyph, GlyphKey};
+use renderer::{BLUR_INFLATION_FACTOR, TEXT_TARGET_SIZE};
 use resource_cache::ResourceCache;
-use std::cmp::{self, Ordering};
-use std::collections::{HashMap, HashSet};
-use std::f32;
-use std::hash::{Hash, BuildHasherDefault};
+use resource_list::ResourceList;
+use std::cmp;
+use std::collections::{HashMap};
+//use std::f32;
 use std::mem;
-use std::ops;
+use std::hash::{Hash, BuildHasherDefault};
 use texture_cache::TexturePage;
-use util;
-use webrender_traits::{self, ColorF, FontKey, GlyphInstance, ImageKey, ImageRendering, ComplexClipRegion};
-use webrender_traits::{BorderSide, BorderDisplayItem, BorderStyle, ItemRange, AuxiliaryLists, BorderRadius};
+use webrender_traits::{ColorF, FontKey, GlyphInstance, ImageKey, ImageRendering, ComplexClipRegion};
+use webrender_traits::{BorderDisplayItem, BorderStyle, ItemRange, AuxiliaryLists, BorderRadius};
 
-#[derive(Copy, Clone, Debug)]
-struct vec3 {
-    x: f32,
-    y: f32,
-    z: f32,
+const MAX_PRIMITIVES_PER_PASS: usize = 8;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ShaderId(pub u32);
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TileLayout {
+    Empty,
+    L4P1,
+    L4P2,
+    L4P3,
+    L4P4,
+    L4P7,
 }
 
-impl vec3 {
-    fn from_point_4d(p: &Point4D<f32>) -> vec3 {
-        vec3 {
-            x: p.x / p.w,
-            y: p.y / p.w,
-            z: p.z / p.w,
+#[derive(Debug)]
+pub struct EmptyTile {
+    pub rect: Rect<i32>,
+}
+
+#[derive(Debug)]
+pub struct TileL4P1 {
+    pub rect: Rect<i32>,
+    pub layer_info: [LayerTemplateIndex; 4],
+    pub prim_info: [PrimitiveKind; 4],
+    pub prim: PackedPrimitive,
+}
+
+#[derive(Debug)]
+pub struct TileL4P2 {
+    pub rect: Rect<i32>,
+    pub layer_info: [LayerTemplateIndex; 4],
+    pub prim_info: [PrimitiveKind; 4],
+    pub prims: [PackedPrimitive; 2],
+}
+
+#[derive(Debug)]
+pub struct TileL4P3 {
+    pub rect: Rect<i32>,
+    pub layer_info: [LayerTemplateIndex; 4],
+    pub prim_info: [PrimitiveKind; 4],
+    pub prims: [PackedPrimitive; 3],
+}
+
+#[derive(Debug)]
+pub struct TileL4P4 {
+    pub rect: Rect<i32>,
+    pub layer_info: [LayerTemplateIndex; 4],
+    pub prim_info: [PrimitiveKind; 4],
+    pub prims: [PackedPrimitive; 4],
+}
+
+#[derive(Debug)]
+pub struct TileL4P7 {
+    pub rect: Rect<i32>,
+    pub layer_info: [LayerTemplateIndex; 4],
+    pub prim_info: [PrimitiveKind; 8],
+    pub prims: [PackedPrimitive; 7],
+}
+
+#[derive(Debug)]
+pub enum TileData {
+    Empty(Vec<EmptyTile>),
+    L4P1(Vec<TileL4P1>),
+    L4P2(Vec<TileL4P2>),
+    L4P3(Vec<TileL4P3>),
+    L4P4(Vec<TileL4P4>),
+    L4P7(Vec<TileL4P7>),
+}
+
+trait PrimitiveHelpers {
+    fn get(&self, key: PrimitiveKey) -> PackedPrimitive;
+}
+
+impl PrimitiveHelpers for Vec<Primitive> {
+    #[inline]
+    fn get(&self, key: PrimitiveKey) -> PackedPrimitive {
+        let PrimitiveIndex(index) = key.index;
+        self[index as usize].packed.clone()
+    }
+}
+
+impl TileData {
+    fn add_tile(&mut self,
+                layout: TileLayout,
+                tile: &Tile,
+                primitives: &Vec<Primitive>) {
+        match *self {
+            TileData::Empty(ref mut tiles) => {
+                assert!(layout == TileLayout::Empty);
+                tiles.push(EmptyTile {
+                    rect: tile.screen_rect,
+                });
+            }
+            TileData::L4P1(ref mut tiles) => {
+                assert!(layout == TileLayout::L4P1);
+                let tile_layer = &tile.layers[0];
+                let prim_key = tile_layer.primitives[0];
+                let tile = TileL4P1 {
+                    rect: tile.screen_rect,
+                    layer_info: [
+                                  tile_layer.layer_index,
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0)
+                                ],
+                    prim_info: [
+                                 prim_key.kind,
+                                 PrimitiveKind::Invalid,
+                                 PrimitiveKind::Invalid,
+                                 PrimitiveKind::Invalid
+                               ],
+                    prim: primitives.get(prim_key),
+                };
+                tiles.push(tile);
+            }
+            TileData::L4P2(ref mut tiles) => {
+                assert!(layout == TileLayout::L4P2);
+                let tile_layer = &tile.layers[0];
+                let pk0 = tile_layer.primitives[0];
+                let pk1 = tile_layer.primitives[1];
+                let tile = TileL4P2 {
+                    rect: tile.screen_rect,
+                    layer_info: [
+                                  tile_layer.layer_index,
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0)
+                                ],
+                    prim_info: [
+                                 pk0.kind,
+                                 pk1.kind,
+                                 PrimitiveKind::Invalid,
+                                 PrimitiveKind::Invalid
+                               ],
+                    prims: [
+                            primitives.get(pk0),
+                            primitives.get(pk1),
+                           ],
+                };
+                tiles.push(tile);
+            }
+            TileData::L4P3(ref mut tiles) => {
+                assert!(layout == TileLayout::L4P3);
+                let tile_layer = &tile.layers[0];
+                let pk0 = tile_layer.primitives[0];
+                let pk1 = tile_layer.primitives[1];
+                let pk2 = tile_layer.primitives[2];
+                let tile = TileL4P3 {
+                    rect: tile.screen_rect,
+                    layer_info: [
+                                  tile_layer.layer_index,
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0)
+                                ],
+                    prim_info: [
+                                 pk0.kind,
+                                 pk1.kind,
+                                 pk2.kind,
+                                 PrimitiveKind::Invalid
+                               ],
+                    prims: [
+                            primitives.get(pk0),
+                            primitives.get(pk1),
+                            primitives.get(pk2),
+                           ],
+                };
+                tiles.push(tile);
+            }
+            TileData::L4P4(ref mut tiles) => {
+                assert!(layout == TileLayout::L4P4);
+                let tile_layer = &tile.layers[0];
+                let mut packed_tile = TileL4P4 {
+                    rect: tile.screen_rect,
+                    layer_info: [
+                                  tile_layer.layer_index,
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0)
+                                ],
+                    prim_info: [
+                                PrimitiveKind::Invalid,
+                                PrimitiveKind::Invalid,
+                                PrimitiveKind::Invalid,
+                                PrimitiveKind::Invalid,
+                               ],
+                    prims: unsafe { mem::uninitialized() },
+                };
+                tile.visit_primitives(4, |key, index| {
+                    packed_tile.prim_info[index] = key.kind;
+                    packed_tile.prims[index] = primitives.get(key);
+                });
+                tiles.push(packed_tile);
+            }
+            TileData::L4P7(ref mut tiles) => {
+                assert!(layout == TileLayout::L4P7);
+                let tile_layer = &tile.layers[0];
+                let mut packed_tile = TileL4P7 {
+                    rect: tile.screen_rect,
+                    layer_info: [
+                                  tile_layer.layer_index,
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0)
+                                ],
+                    prim_info: [
+                                PrimitiveKind::Invalid,
+                                PrimitiveKind::Invalid,
+                                PrimitiveKind::Invalid,
+                                PrimitiveKind::Invalid,
+                                PrimitiveKind::Invalid,
+                                PrimitiveKind::Invalid,
+                                PrimitiveKind::Invalid,
+                                PrimitiveKind::Invalid,
+                               ],
+                    prims: unsafe { mem::uninitialized() },
+                };
+                tile.visit_primitives(7, |key, index| {
+                    packed_tile.prim_info[index] = key.kind;
+                    packed_tile.prims[index] = primitives.get(key);
+                });
+                tiles.push(packed_tile);
+            }
         }
     }
+}
 
-    fn new(x: f32, y: f32, z: f32) -> vec3 {
-        vec3 {
-            x: x,
-            y: y,
-            z: z,
+#[derive(Debug)]
+pub struct TileBatch {
+    pub data: TileData,
+    pub shader_id: ShaderId,
+}
+
+impl TileBatch {
+    fn new(shader_id: ShaderId, tile_layout: TileLayout) -> TileBatch {
+        let data = match tile_layout {
+            TileLayout::Empty => TileData::Empty(Vec::new()),
+            TileLayout::L4P1 => TileData::L4P1(Vec::new()),
+            TileLayout::L4P2 => TileData::L4P2(Vec::new()),
+            TileLayout::L4P3 => TileData::L4P3(Vec::new()),
+            TileLayout::L4P4 => TileData::L4P4(Vec::new()),
+            TileLayout::L4P7 => TileData::L4P7(Vec::new()),
+        };
+
+        TileBatch {
+            shader_id: shader_id,
+            data: data,
         }
     }
 }
 
-fn dot(a: vec3, b: vec3) -> f32 {
-    a.x * b.x +
-    a.y * b.y +
-    a.z * b.z
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum PrimitiveKind {
+    Rectangle = 0,
+    //SetClip,
+    //ClearClip,
+    Image,
+    Gradient,
+    Text,
+
+    Invalid,
 }
 
-fn cross(a: vec3, b: vec3) -> vec3 {
-    vec3 {
-        x: a.y * b.z - a.z * b.y,
-        y: a.z * b.x - a.x * b.z,
-        z: a.x * b.y - a.y * b.x,
-    }
+#[derive(Debug, Clone, Copy)]
+pub enum TechniqueCountKind {
+    Equal,
+    LessEqual,
+    DontCare,
 }
 
-fn len(v: vec3) -> f32 {
-    (v.x*v.x + v.y*v.y + v.z*v.z).sqrt()
-}
-
-fn normalize(v: vec3) -> vec3 {
-    let inv_len = 1.0 / len(v);
-
-    let r = vec3 {
-        x: v.x * inv_len,
-        y: v.y * inv_len,
-        z: v.z * inv_len,
-    };
-
-    r
-}
-
-fn mix(x: vec3, y: vec3, a: f32) -> vec3 {
-    vec3 {
-        x: x.x * (1.0 - a) + y.x * a,
-        y: x.y * (1.0 - a) + y.y * a,
-        z: x.z * (1.0 - a) + y.z * a,
-    }
-}
-
-fn sub(a: vec3, b: vec3) -> vec3 {
-    vec3 {
-        x: a.x - b.x,
-        y: a.y - b.y,
-        z: a.z - b.z,
-    }
-}
-
-fn add(a: vec3, b: vec3) -> vec3 {
-    vec3 {
-        x: a.x + b.x,
-        y: a.y + b.y,
-        z: a.z + b.z,
-    }
-}
-
-fn mul(a: vec3, f: f32) -> vec3 {
-    vec3 {
-        x: a.x * f,
-        y: a.y * f,
-        z: a.z * f,
-    }
-}
-
-fn ray_plane(normal: vec3, point: vec3, ray_origin: vec3, ray_dir: vec3, t: &mut f32) -> bool {
-    let denom = dot(normal, ray_dir);
-    if denom > 1e-6 {
-        let d = sub(point, ray_origin);
-        *t = dot(d, normal) / denom;
-        return *t >= 0.0;
-    }
-
-    return false;
-}
-
-fn untransform(r: vec3, n: vec3, a: vec3, inv_transform: &Matrix4) -> Point4D<f32> {
-    let p = vec3::new(r.x, r.y, -100.0);
-    let d = vec3::new(0.0, 0.0, 1.0);
-
-    let mut t = 0.0;
-    ray_plane(n, a, p, d, &mut t);
-    let c = add(p, mul(d, t));// mix(p, d, t);
-
-    let out = inv_transform.transform_point4d(&Point4D::new(c.x, c.y, c.z, 1.0));
-
-    out
-}
-
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct TechniqueParams {
+#[derive(Debug, Clone)]
+pub struct TechniqueDescriptor {
+    pub primitive_count: usize,
+    pub primitive_count_kind: TechniqueCountKind,
     pub layer_count: usize,
-    pub rect_count: usize,
-    pub image_count: usize,
-    pub text_count: usize,
+    pub layer_count_kind: TechniqueCountKind,
+    pub primitive_kinds: [Option<PrimitiveKind>; MAX_PRIMITIVES_PER_PASS],
+    pub tile_layout: TileLayout,
+    pub shader_id: ShaderId,
+}
+
+impl TechniqueDescriptor {
+    pub fn new(primitive_count: usize,
+               primitive_count_kind: TechniqueCountKind,
+               layer_count: usize,
+               layer_count_kind: TechniqueCountKind,
+               primitives: &[PrimitiveKind],
+               tile_layout: TileLayout,
+               shader_id: ShaderId) -> TechniqueDescriptor {
+        let mut primitive_kinds = [None; MAX_PRIMITIVES_PER_PASS];
+
+        for (index, prim) in primitives.iter().enumerate() {
+            primitive_kinds[index] = Some(*prim);
+        }
+
+        TechniqueDescriptor {
+            primitive_count: primitive_count,
+            primitive_count_kind: primitive_count_kind,
+            layer_count: layer_count,
+            layer_count_kind: layer_count_kind,
+            primitive_kinds: primitive_kinds,
+            tile_layout: tile_layout,
+            shader_id: shader_id,
+        }
+    }
+
+    fn can_draw(&self, tile: &Tile) -> bool {
+        let prim_count_ok = match self.primitive_count_kind {
+            TechniqueCountKind::Equal => tile.prim_count as usize == self.primitive_count,
+            TechniqueCountKind::LessEqual => tile.prim_count as usize <= self.primitive_count,
+            TechniqueCountKind::DontCare => true,
+        };
+        if !prim_count_ok {
+            return false;
+        }
+
+        let layer_count_ok = match self.layer_count_kind {
+            TechniqueCountKind::Equal => tile.layers.len() == self.layer_count,
+            TechniqueCountKind::LessEqual => tile.layers.len() <= self.layer_count,
+            TechniqueCountKind::DontCare => true,
+        };
+        if !layer_count_ok {
+            return false;
+        }
+
+        let mut test_index = 0;
+        for layer in &tile.layers {
+            for prim_key in &layer.primitives {
+                if test_index == MAX_PRIMITIVES_PER_PASS {
+                    return true;
+                }
+                if let Some(required_prim) = self.primitive_kinds[test_index] {
+                    if prim_key.kind != required_prim {
+                        return false;
+                    }
+                }
+                test_index += 1;
+            }
+        }
+
+        true
+    }
+}
+
+pub struct TileFrame {
+    pub viewport_size: Size2D<i32>,
+    pub text_buffer: TextBuffer,
+    pub color_texture_id: TextureId,
+    pub mask_texture_id: TextureId,
+    pub layer_ubo: Ubo<LayerTemplateIndex, PackedLayer>,
+    pub batches: Vec<TileBatch>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackedPrimitive {
+    pub p0: Point2D<f32>,
+    pub p1: Point2D<f32>,
+    pub st0: Point2D<f32>,
+    pub st1: Point2D<f32>,
+    pub color: ColorF,
+}
+
+struct Primitive {
+    xf_rect: TransformedRect,
+    is_opaque: bool,
+    packed: PackedPrimitive,
+}
+
+pub struct TileBuilder {
+    screen_rect: Rect<i32>,
+    layer_templates: Vec<LayerTemplate>,
+    layer_instances: Vec<LayerInstance>,
+    layer_stack: Vec<LayerTemplateIndex>,
+    primitives: Vec<Primitive>,
+    color_texture_id: TextureId,
+    mask_texture_id: TextureId,
+    scroll_offset: Point2D<f32>,
+    techniques: Vec<TechniqueDescriptor>,
+    text_buffer: TextBuffer,
+}
+
+#[derive(Clone, Debug)]
+pub struct PackedGlyph {
+    pub p0: Point2D<f32>,
+    pub p1: Point2D<f32>,
+    pub st0: Point2D<f32>,
+    pub st1: Point2D<f32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TextRun {
-    pub glyphs: Vec<PackedGlyph>,
     pub st0: Point2D<f32>,
     pub st1: Point2D<f32>,
     pub rect: Rect<f32>,
@@ -152,7 +422,7 @@ pub struct TextRun {
 pub struct TextBuffer {
     pub texture_size: f32,
     pub page_allocator: TexturePage,
-    pub texts: HashMap<TextPrimitiveIndex, TextRun>,
+    pub glyphs: Vec<PackedGlyph>,
 }
 
 impl TextBuffer {
@@ -160,20 +430,13 @@ impl TextBuffer {
         TextBuffer {
             texture_size: size as f32,
             page_allocator: TexturePage::new(TextureId(0), size),
-            texts: HashMap::new(),
+            glyphs: Vec::new(),
         }
     }
 
-    fn push_text(&mut self,
-                 text_index: TextPrimitiveIndex,
-                 old_rect: &Rect<f32>,
-                 glyphs: &GlyphPrimitive) {
-        if self.texts.contains_key(&text_index) {
-            return;
-        }
-
+    fn push_text(&mut self, glyphs: Vec<PackedGlyph>) -> TextRun {
         let mut rect = Rect::zero();
-        for glyph in &glyphs.glyphs {
+        for glyph in &glyphs {
             rect = rect.union(&Rect::new(glyph.p0, Size2D::new(glyph.p1.x - glyph.p0.x, glyph.p1.y - glyph.p0.y)));
         }
 
@@ -183,8 +446,7 @@ impl TextBuffer {
                          .allocate(&size, TextureFilter::Linear)
                          .expect("handle no texture space!");
 
-        let mut text = TextRun {
-            glyphs: Vec::new(),
+        let text = TextRun {
             st0: Point2D::new(origin.x as f32 / self.texture_size,
                               origin.y as f32 / self.texture_size),
             st1: Point2D::new((origin.x + size.width) as f32 / self.texture_size,
@@ -193,8 +455,8 @@ impl TextBuffer {
         };
 
         let d = Point2D::new(origin.x as f32, origin.y as f32) - rect.origin;
-        for glyph in &glyphs.glyphs {
-            text.glyphs.push(PackedGlyph {
+        for glyph in &glyphs {
+            self.glyphs.push(PackedGlyph {
                 st0: glyph.st0,
                 st1: glyph.st1,
                 p0: glyph.p0 + d,
@@ -202,156 +464,34 @@ impl TextBuffer {
             });
         }
 
-        self.texts.insert(text_index, text);
-    }
-
-    fn get(&self, text_index: TextPrimitiveIndex) -> &TextRun {
-        &self.texts[&text_index]
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ColorBufferKey(u32);
-
-#[derive(Debug, Clone)]
-pub struct ColorBuffer {
-    pub values: Vec<u8>,
-}
-
-impl ColorBuffer {
-    fn new() -> ColorBuffer {
-        ColorBuffer {
-            values: Vec::new(),
-        }
-    }
-
-    fn push_color(&mut self, color: &ColorF) -> ColorBufferKey {
-        let key = self.values.len() as u32 / 4;
-        let color = PackedColor::from_color(color);
-        self.values.push(color.b);
-        self.values.push(color.g);
-        self.values.push(color.r);
-        self.values.push(color.a);
-        ColorBufferKey(key)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ConstantBufferKey(u32);
-
-#[derive(Debug, Clone)]
-pub struct ConstantBuffer {
-    pub values: Vec<f32>,
-}
-
-impl ConstantBuffer {
-    fn new() -> ConstantBuffer {
-        ConstantBuffer {
-            values: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, x: f32, y: f32, z: f32, w: f32) -> ConstantBufferKey {
-        let key = self.values.len() as u32 / 4;
-        self.values.push(x);
-        self.values.push(y);
-        self.values.push(z);
-        self.values.push(w);
-        ConstantBufferKey(key)
-    }
-}
-
-pub struct UniformBuffer {
-    max_ubo_size: usize,
-
-    pub layer_ubos: Vec<Ubo<LayerTemplateIndex, PackedLayer>>,
-    pub rect_ubos: Vec<Ubo<RectanglePrimitiveIndex, PackedRectangle>>,
-    pub clip_ubos: Vec<Ubo<ClipPrimitiveIndex, Clip>>,
-    pub image_ubos: Vec<Ubo<ImagePrimitiveIndex, PackedImage>>,
-    pub gradient_ubos: Vec<Ubo<GradientPrimitiveIndex, PackedGradient>>,
-    pub gradient_stop_ubos: Vec<ArrayUbo<GradientStopPrimitiveIndex, PackedGradientStop>>,
-    pub text_ubos: Vec<Ubo<TextPrimitiveIndex, PackedText>>,
-    //pub glyph_ubos: Vec<ArrayUbo<GlyphPrimitiveIndex, PackedGlyph>>,
-    pub cmd_ubo: Vec<PackedCommand>,
-
-    layer_ubo: Ubo<LayerTemplateIndex, PackedLayer>,
-    rect_ubo: Ubo<RectanglePrimitiveIndex, PackedRectangle>,
-    clip_ubo: Ubo<ClipPrimitiveIndex, Clip>,
-    image_ubo: Ubo<ImagePrimitiveIndex, PackedImage>,
-    gradient_ubo: Ubo<GradientPrimitiveIndex, PackedGradient>,
-    gradient_stop_ubo: ArrayUbo<GradientStopPrimitiveIndex, PackedGradientStop>,
-    text_ubo: Ubo<TextPrimitiveIndex, PackedText>,
-    //glyph_ubo: ArrayUbo<GlyphPrimitiveIndex, PackedGlyph>,
-}
-
-impl UniformBuffer {
-    fn new(max_ubo_size: usize) -> UniformBuffer {
-        UniformBuffer {
-            max_ubo_size: max_ubo_size,
-
-            layer_ubos: Vec::new(),
-            rect_ubos: Vec::new(),
-            clip_ubos: Vec::new(),
-            image_ubos: Vec::new(),
-            gradient_ubos: Vec::new(),
-            gradient_stop_ubos: Vec::new(),
-            text_ubos: Vec::new(),
-            //glyph_ubos: Vec::new(),
-
-            layer_ubo: Ubo::new(),
-            rect_ubo: Ubo::new(),
-            clip_ubo: Ubo::new(),
-            image_ubo: Ubo::new(),
-            gradient_ubo: Ubo::new(),
-            gradient_stop_ubo: ArrayUbo::new(),
-            text_ubo: Ubo::new(),
-            //glyph_ubo: ArrayUbo::new(),
-            cmd_ubo: Vec::new(),
-        }
-    }
-
-    fn finalize(&mut self) {
-        self.layer_ubos.push(mem::replace(&mut self.layer_ubo, Ubo::new()));
-        self.rect_ubos.push(mem::replace(&mut self.rect_ubo, Ubo::new()));
-        self.clip_ubos.push(mem::replace(&mut self.clip_ubo, Ubo::new()));
-        self.image_ubos.push(mem::replace(&mut self.image_ubo, Ubo::new()));
-        self.gradient_ubos.push(mem::replace(&mut self.gradient_ubo, Ubo::new()));
-        self.gradient_stop_ubos.push(mem::replace(&mut self.gradient_stop_ubo, ArrayUbo::new()));
-        //self.glyph_ubos.push(mem::replace(&mut self.glyph_ubo, ArrayUbo::new()));
-        self.text_ubos.push(mem::replace(&mut self.text_ubo, Ubo::new()));
-
-        assert!(self.cmd_ubo.len() < ((self.max_ubo_size - 16) / mem::size_of::<Command>()));        // A reasonable estimate for now...
+        text
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct ClipCorner {
     position: Point2D<f32>,
-    outer_radius_x: f32, //DevicePixel,
-    outer_radius_y: f32, //DevicePixel,
-    inner_radius_x: f32, //DevicePixel,
-    inner_radius_y: f32, //DevicePixel,
+    outer_radius_x: f32,
+    outer_radius_y: f32,
+    inner_radius_x: f32,
+    inner_radius_y: f32,
     padding: Point2D<f32>,
 }
 
+/*
 impl ClipCorner {
     pub fn invalid() -> ClipCorner {
         ClipCorner {
             position: Point2D::zero(),
-            outer_radius_x: 0.0, //DevicePixel::from_u32(0),
-            outer_radius_y: 0.0, //DevicePixel::from_u32(0),
-            inner_radius_x: 0.0, //DevicePixel::from_u32(0),
-            inner_radius_y: 0.0, //DevicePixel::from_u32(0),
+            outer_radius_x: 0.0,
+            outer_radius_y: 0.0,
+            inner_radius_x: 0.0,
+            inner_radius_y: 0.0,
             padding: Point2D::zero(),
         }
     }
 }
-
-#[derive(Debug)]
-pub struct ClipPrimitive {
-    xf_rect: TransformedRect,
-    packed: Clip,
-}
+*/
 
 #[derive(Debug, Clone)]
 pub struct Clip {
@@ -363,6 +503,7 @@ pub struct Clip {
 }
 
 impl Clip {
+    /*
     pub fn invalid() -> Clip {
         Clip {
             rect: Rect::zero(),
@@ -372,9 +513,9 @@ impl Clip {
             bottom_right: ClipCorner::invalid(),
         }
     }
+*/
 
-    pub fn from_clip_region(clip: &ComplexClipRegion,
-                            device_pixel_ratio: f32) -> Clip {
+    pub fn from_clip_region(clip: &ComplexClipRegion) -> Clip {
         Clip {
             rect: clip.rect,
             top_left: ClipCorner {
@@ -418,8 +559,7 @@ impl Clip {
 
     pub fn from_border_radius(rect: &Rect<f32>,
                               outer_radius: &BorderRadius,
-                              inner_radius: &BorderRadius,
-                              device_pixel_ratio: f32) -> Clip {
+                              inner_radius: &BorderRadius) -> Clip {
         Clip {
             rect: *rect,
             top_left: ClipCorner {
@@ -463,101 +603,24 @@ impl Clip {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct RectanglePrimitiveIndex(u32);
+pub struct PrimitiveIndex(u32);
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct GradientPrimitiveIndex(u32);
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct GradientStopPrimitiveIndex(u32);
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct TextPrimitiveIndex(u32);
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct GlyphPrimitiveIndex(u32);
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct ImagePrimitiveIndex(u32);
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct ClipPrimitiveIndex(u32);
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub enum PrimitiveKey {
-    Rectangle(RectanglePrimitiveIndex),
-    SetClip(ClipPrimitiveIndex),
-    ClearClip(ClipPrimitiveIndex),
-    Image(ImagePrimitiveIndex),
-    Gradient(GradientPrimitiveIndex),
-    Text(TextPrimitiveIndex),
+#[derive(Debug, Copy, Clone)]
+pub struct PrimitiveKey {
+    kind: PrimitiveKind,
+    index: PrimitiveIndex,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct PackedCommand(pub u32);
-
-pub enum Command {
-    SetLayer,
-    DrawRectangle,
-    SetClip,
-    ClearClip,
-    DrawImage,
-    DrawGradient,
-    DrawText,
-}
-
-impl PackedCommand {
-    pub fn new(cmd: Command, index: usize) -> PackedCommand {
-        debug_assert!(index < 65536);       // ensure u16 (should be bounded by max ubo size anyway)
-        PackedCommand(index as u32 | ((cmd as u32) << 24))
-    }
-
-    pub fn raw(value: u32) -> PackedCommand {
-        PackedCommand(value)
+impl PrimitiveKey {
+    fn new(kind: PrimitiveKind, index: usize) -> PrimitiveKey {
+        PrimitiveKey {
+            kind: kind,
+            index: PrimitiveIndex(index as u32),
+        }
     }
 }
 
-#[derive(Debug)]
-struct ImagePrimitive {
-    xf_rect: TransformedRect,
-    packed: PackedImage,
-}
-
-#[derive(Clone, Debug)]
-pub struct PackedImage {
-    p0: Point2D<f32>,
-    st0: Point2D<f32>,
-    p1: Point2D<f32>,
-    st1: Point2D<f32>,
-}
-
-#[derive(Clone, Debug)]
-pub struct PackedGlyph {
-    pub p0: Point2D<f32>,
-    pub p1: Point2D<f32>,
-    pub st0: Point2D<f32>,
-    pub st1: Point2D<f32>,
-}
-
-pub struct GlyphPrimitive {
-    glyphs: Vec<PackedGlyph>,
-}
-
-#[derive(Debug)]
-pub struct TextPrimitive {
-    xf_rect: TransformedRect,
-    glyph_index: GlyphPrimitiveIndex,
-    packed: PackedText,
-}
-
-#[derive(Clone, Debug)]
-pub struct PackedText {
-    p0: Point2D<f32>,
-    st0: Point2D<f32>,
-    p1: Point2D<f32>,
-    st1: Point2D<f32>,
-    color: ColorF,
-}
+/*
 
 #[derive(Clone, Debug)]
 pub struct PackedGradientStop {
@@ -586,37 +649,12 @@ pub struct GradientPrimitive {
     packed: PackedGradient,
 }
 
-#[derive(Clone, Debug)]
-pub struct PackedRectangle {
-    p0: Point2D<f32>,
-    p1: Point2D<f32>,
-    color: ColorF,
-    //color_key: ColorBufferKey,
-    //padding: [u32; 3],
-}
+*/
 
 #[derive(Clone, Debug)]
 pub struct PackedLayer {
-    blend_info: [f32; 4],
-    p0: Point2D<f32>,
-    p1: Point2D<f32>,
     inv_transform: Matrix4,
     screen_vertices: [Point4D<f32>; 4],
-}
-
-#[derive(Debug)]
-pub struct PackedTile {
-    pub rect: Rect<i32>,
-    pub rect_ubo_index: usize,
-    pub layer_ubo_index: usize,
-    pub clip_ubo_index: usize,
-    pub image_ubo_index: usize,
-    pub gradient_ubo_index: usize,
-    pub gradient_stop_ubo_index: usize,
-    pub text_ubo_index: usize,
-    pub cmd_index: usize,
-    pub cmd_count: usize,
-    pub technique_params: TechniqueParams,
 }
 
 #[derive(Debug)]
@@ -633,12 +671,18 @@ impl<KEY: Eq + Hash + Copy, TYPE: Clone> Ubo<KEY, TYPE> {
         }
     }
 
+/*
     fn can_fit(&self, keys: &Vec<KEY>, kind: UboBindLocation, max_ubo_size: usize) -> bool {
         let max_item_count = kind.get_array_len(max_ubo_size);
         let new_item_count = keys.iter().filter(|key| !self.map.contains_key(key)).count();
         let item_count = self.items.len() + new_item_count;
         item_count < max_item_count
     }
+
+    fn get_index(&self, key: KEY) -> u32 {
+        self.map[&key] as u32
+    }
+*/
 
     fn maybe_insert_and_get_index(&mut self, key: KEY, data: &TYPE) -> usize {
         let map = &mut self.map;
@@ -647,59 +691,6 @@ impl<KEY: Eq + Hash + Copy, TYPE: Clone> Ubo<KEY, TYPE> {
         *map.entry(key).or_insert_with(|| {
             let index = items.len();
             items.push(data.clone());
-            index
-        })
-    }
-}
-
-#[derive(Debug)]
-pub struct ArrayUbo<KEY: Eq + Hash, TYPE> {
-    pub items: Vec<TYPE>,
-    map: HashMap<KEY, usize, BuildHasherDefault<FnvHasher>>,
-}
-
-impl<KEY: Eq + Hash + Copy, TYPE: Clone> ArrayUbo<KEY, TYPE> {
-    fn new() -> ArrayUbo<KEY, TYPE> {
-        ArrayUbo {
-            items: Vec::new(),
-            map: HashMap::with_hasher(Default::default()),
-        }
-    }
-
-    fn used_size(&self) -> usize {
-        self.required_bytes(self.items.len())
-    }
-
-    fn required_bytes(&self, item_count: usize) -> usize {
-        item_count * mem::size_of::<TYPE>()
-    }
-
-    fn can_fit<F>(&self,
-                  keys: &Vec<KEY>,
-                  kind: UboBindLocation,
-                  max_ubo_size: usize,
-                  f: F) -> bool
-                  where F: Fn(&KEY) -> usize {
-        let max_item_count = kind.get_array_len(max_ubo_size);
-        let new_item_count = keys.iter()
-                                 .filter(|key| !self.map.contains_key(key))
-                                 .map(|key| {
-                                   f(key)
-                                 })
-                                 .fold(0, ops::Add::add);
-        let item_count = self.items.len() + new_item_count;
-        item_count < max_item_count
-    }
-
-    fn maybe_insert_and_get_index(&mut self, key: KEY, data: &[TYPE]) -> usize {
-        let map = &mut self.map;
-        let items = &mut self.items;
-
-        *map.entry(key).or_insert_with(|| {
-            let index = items.len();
-            for item in data {
-                items.push(item.clone());
-            }
             index
         })
     }
@@ -718,245 +709,6 @@ struct TransformedRect {
     screen_rect: Rect<i32>,
 }
 
-#[derive(Debug)]
-struct RectanglePrimitive {
-    xf_rect: TransformedRect,
-    packed: PackedRectangle,
-}
-
-struct PrimitiveBuffer {
-    rectangles: Vec<RectanglePrimitive>,
-    clips: Vec<ClipPrimitive>,
-    images: Vec<ImagePrimitive>,
-    gradients: Vec<GradientPrimitive>,
-    gradient_stops: Vec<GradientStopPrimitive>,
-    glyphs: Vec<GlyphPrimitive>,
-    texts: Vec<TextPrimitive>,
-}
-
-impl PrimitiveBuffer {
-    fn new() -> PrimitiveBuffer {
-        PrimitiveBuffer {
-            rectangles: Vec::new(),
-            clips: Vec::new(),
-            images: Vec::new(),
-            gradients: Vec::new(),
-            gradient_stops: Vec::new(),
-            glyphs: Vec::new(),
-            texts: Vec::new(),
-        }
-    }
-
-    fn print_stats(&self) {
-        println!("PB: r={} c={} i={} g={} t={}", self.rectangles.len(), self.clips.len(), self.images.len(), self.gradients.len(), self.texts.len());
-        println!("PB: total prims = {}", self.rectangles.len() + self.clips.len() + self.images.len() + self.gradients.len() + self.texts.len());
-    }
-
-    fn get_xf_rect_and_opacity(&self, primitive_key: &PrimitiveKey) -> (&TransformedRect, bool) {
-        match primitive_key {
-            &PrimitiveKey::Rectangle(index) => {
-                let RectanglePrimitiveIndex(index) = index;
-                let rect = &self.rectangles[index as usize];
-                (&rect.xf_rect, rect.packed.color.a == 1.0)
-            }
-            &PrimitiveKey::Text(index) => {
-                let TextPrimitiveIndex(index) = index;
-                (&self.texts[index as usize].xf_rect, false)
-            }
-            &PrimitiveKey::Image(index) => {
-                let ImagePrimitiveIndex(index) = index;
-                let image = &self.images[index as usize];
-                (&image.xf_rect, false)                     // TODO: Check if image is opaque - easy optimization!
-            }
-            &PrimitiveKey::SetClip(index) | &PrimitiveKey::ClearClip(index) => {
-                let ClipPrimitiveIndex(index) = index;
-                let clip = &self.clips[index as usize];
-                (&clip.xf_rect, false)
-            }
-            _ => {
-                panic!("todo");
-            }
-        }
-    }
-
-    fn get_local_rect(&self, primitive_key: &PrimitiveKey) -> &Rect<f32> {
-        match primitive_key {
-            &PrimitiveKey::Rectangle(index) => {
-                let RectanglePrimitiveIndex(index) = index;
-                &self.rectangles[index as usize].xf_rect.local_rect
-            }
-            &PrimitiveKey::SetClip(index) => {
-                let ClipPrimitiveIndex(index) = index;
-                &self.clips[index as usize].xf_rect.local_rect
-            }
-            &PrimitiveKey::ClearClip(index) => {
-                let ClipPrimitiveIndex(index) = index;
-                &self.clips[index as usize].xf_rect.local_rect
-            }
-            &PrimitiveKey::Image(index) => {
-                let ImagePrimitiveIndex(index) = index;
-                &self.images[index as usize].xf_rect.local_rect
-            }
-            &PrimitiveKey::Gradient(index) => {
-                let GradientPrimitiveIndex(index) = index;
-                &self.gradients[index as usize].rect
-            }
-            &PrimitiveKey::Text(index) => {
-                let TextPrimitiveIndex(index) = index;
-                &self.texts[index as usize].xf_rect.local_rect
-            }
-        }
-    }
-
-    fn add_rectangle(&mut self,
-                     xf_rect: TransformedRect,
-                     color: ColorF) -> PrimitiveKey {
-        let index = self.rectangles.len();
-        self.rectangles.push(RectanglePrimitive {
-            packed: PackedRectangle {
-                p0: xf_rect.local_rect.origin,
-                p1: xf_rect.local_rect.bottom_right(),
-                color: color,
-                //color_key: color_key,
-                //padding: [0, 0, 0],
-            },
-            xf_rect: xf_rect,
-        });
-        PrimitiveKey::Rectangle(RectanglePrimitiveIndex(index as u32))
-    }
-
-    fn add_set_clip(&mut self,
-                    xf_rect: TransformedRect,
-                    clip: Clip) -> PrimitiveKey {
-        let index = self.clips.len();
-        self.clips.push(ClipPrimitive {
-            packed: clip,
-            xf_rect: xf_rect,
-        });
-        PrimitiveKey::SetClip(ClipPrimitiveIndex(index as u32))
-    }
-
-    fn add_clear_clip(&mut self) -> PrimitiveKey {
-        PrimitiveKey::ClearClip(ClipPrimitiveIndex((self.clips.len() - 1) as u32))
-    }
-
-    fn add_image(&mut self,
-                 xf_rect: TransformedRect,
-                 st0: Point2D<f32>,
-                 st1: Point2D<f32>) -> PrimitiveKey {
-        let index = self.images.len();
-        self.images.push(ImagePrimitive {
-            packed: PackedImage {
-                p0: xf_rect.local_rect.origin,
-                p1: xf_rect.local_rect.bottom_right(),
-                st0: st0,
-                st1: st1,
-            },
-            xf_rect: xf_rect,
-        });
-        PrimitiveKey::Image(ImagePrimitiveIndex(index as u32))
-    }
-
-    fn add_gradient(&mut self,
-                    rect: Rect<f32>,
-                    start_point: &Point2D<f32>,
-                    end_point: &Point2D<f32>,
-                    stops_index: GradientStopPrimitiveIndex,
-                    stop_count: u32) -> PrimitiveKey {
-        let angle = (start_point.y - end_point.y).atan2(end_point.x - start_point.x);
-        let (sin_angle, cos_angle) = angle.sin_cos();
-        let rx0 = start_point.x * cos_angle - start_point.y * sin_angle;
-        let rx1 = end_point.x * cos_angle - end_point.y * sin_angle;
-        let d = rx1 - rx0;
-
-        let index = self.gradients.len();
-        self.gradients.push(GradientPrimitive {
-            rect: rect,
-            stops_index: stops_index,
-            packed: PackedGradient {
-                p0: rect.origin,
-                p1: rect.bottom_right(),
-                constants: [ sin_angle, cos_angle, d, rx0 ],
-                stop_start_index: 0,
-                stop_count: stop_count,
-                pad0: 0,
-                pad1: 0,
-            },
-        });
-        PrimitiveKey::Gradient(GradientPrimitiveIndex(index as u32))
-    }
-
-    fn add_gradient_stops(&mut self, stops: Vec<PackedGradientStop>) -> GradientStopPrimitiveIndex {
-        let index = self.gradient_stops.len();
-        self.gradient_stops.push(GradientStopPrimitive {
-            stops: stops,
-        });
-        GradientStopPrimitiveIndex(index as u32)
-    }
-
-    fn add_text(&mut self,
-                xf_rect: TransformedRect,
-                color: ColorF,
-                glyph_index: GlyphPrimitiveIndex) -> PrimitiveKey {
-        let index = self.texts.len();
-        self.texts.push(TextPrimitive {
-            packed: PackedText {
-                p0: xf_rect.local_rect.origin,
-                p1: xf_rect.local_rect.bottom_right(),
-                color: color,
-                st0: Point2D::zero(),
-                st1: Point2D::zero(),
-            },
-            xf_rect: xf_rect,
-            glyph_index: glyph_index,
-        });
-        PrimitiveKey::Text(TextPrimitiveIndex(index as u32))
-    }
-
-    fn add_glyphs(&mut self, glyphs: Vec<PackedGlyph>) -> GlyphPrimitiveIndex {
-        let index = self.glyphs.len();
-        self.glyphs.push(GlyphPrimitive {
-            glyphs: glyphs,
-        });
-        GlyphPrimitiveIndex(index as u32)
-    }
-
-    fn get_rect(&self, index: RectanglePrimitiveIndex) -> &RectanglePrimitive {
-        let RectanglePrimitiveIndex(index) = index;
-        &self.rectangles[index as usize]
-    }
-
-    fn get_clip(&self, index: ClipPrimitiveIndex) -> &ClipPrimitive {
-        let ClipPrimitiveIndex(index) = index;
-        &self.clips[index as usize]
-    }
-
-    fn get_image(&self, index: ImagePrimitiveIndex) -> &ImagePrimitive {
-        let ImagePrimitiveIndex(index) = index;
-        &self.images[index as usize]
-    }
-
-    fn get_gradient(&self, index: GradientPrimitiveIndex) -> &GradientPrimitive {
-        let GradientPrimitiveIndex(index) = index;
-        &self.gradients[index as usize]
-    }
-
-    fn get_gradient_stop(&self, index: GradientStopPrimitiveIndex) -> &GradientStopPrimitive {
-        let GradientStopPrimitiveIndex(index) = index;
-        &self.gradient_stops[index as usize]
-    }
-
-    fn get_text(&self, index: TextPrimitiveIndex) -> &TextPrimitive {
-        let TextPrimitiveIndex(index) = index;
-        &self.texts[index as usize]
-    }
-
-    fn get_glyph(&self, index: GlyphPrimitiveIndex) -> &GlyphPrimitive {
-        let GlyphPrimitiveIndex(index) = index;
-        &self.glyphs[index as usize]
-    }
-}
-
 struct LayerTemplate {
     transform: Matrix4,
     packed: PackedLayer,
@@ -967,6 +719,7 @@ struct LayerInstance {
     primitives: Vec<PrimitiveKey>,
 }
 
+#[derive(Debug)]
 struct TileLayer {
     layer_index: LayerTemplateIndex,
     primitives: Vec<PrimitiveKey>,
@@ -984,16 +737,8 @@ impl TileLayer {
 pub struct Tile {
     pub screen_rect: Rect<i32>,
     layers: Vec<TileLayer>,
-    pub prim_count: usize,
     children: Vec<Tile>,
-
-    required_layers: Vec<LayerTemplateIndex>,
-    required_rects: Vec<RectanglePrimitiveIndex>,
-    required_clips: Vec<ClipPrimitiveIndex>,
-    required_images: Vec<ImagePrimitiveIndex>,
-    required_gradients: Vec<GradientPrimitiveIndex>,
-    required_gradient_stops: Vec<GradientStopPrimitiveIndex>,
-    required_texts: Vec<TextPrimitiveIndex>,
+    prim_count: u32,
 }
 
 impl Tile {
@@ -1003,33 +748,43 @@ impl Tile {
             layers: Vec::new(),
             children: Vec::new(),
             prim_count: 0,
+        }
+    }
 
-            required_layers: Vec::new(),
-            required_rects: Vec::new(),
-            required_clips: Vec::new(),
-            required_images: Vec::new(),
-            required_gradients: Vec::new(),
-            required_gradient_stops: Vec::new(),
-            required_texts: Vec::new(),
+    fn visit_primitives<F>(&self,
+                           max_count: usize,
+                           mut f: F) where F: FnMut(PrimitiveKey, usize) {
+        let mut prim_count = 0;
+
+        for layer in &self.layers {
+            for prim_key in &layer.primitives {
+                f(*prim_key, prim_count);
+                prim_count += 1;
+                if prim_count == max_count {
+                    return;
+                }
+            }
         }
     }
 
     fn add_primitive(&mut self,
                      primitive_key: PrimitiveKey,
                      layer_index: LayerTemplateIndex,
-                     primitives: &PrimitiveBuffer) {
-        let (xf_rect, is_opaque) = primitives.get_xf_rect_and_opacity(&primitive_key);
+                     primitives: &Vec<Primitive>) {
+        let PrimitiveIndex(prim_index) = primitive_key.index;
+        let primitive = &primitives[prim_index as usize];
 
-        if xf_rect.screen_rect.intersects(&self.screen_rect) {
+        if primitive.xf_rect.screen_rect.intersects(&self.screen_rect) {
 
             // Check if this primitive supercedes all existing primitives in this
             // tile - this is a very important optimization to allow the CPU to create
             // small tiles that can use the simple tiling pass shader.
             // TODO(gw): This doesn't work with 3d transforms (it assumes axis aligned rects for now)!!
-            if is_opaque &&
-               xf_rect.screen_rect.contains(&self.screen_rect.origin) &&
-               xf_rect.screen_rect.contains(&self.screen_rect.bottom_right()) {
+            if primitive.is_opaque &&
+               primitive.xf_rect.screen_rect.contains(&self.screen_rect.origin) &&
+               primitive.xf_rect.screen_rect.contains(&self.screen_rect.bottom_right()) {
                 self.layers.clear();
+                self.prim_count = 0;
             }
 
             let need_new_layer = self.layers.is_empty() ||
@@ -1045,11 +800,10 @@ impl Tile {
     }
 
     fn split_if_needed(&mut self,
-                       primitives: &PrimitiveBuffer,
-                       text_buffer: &mut TextBuffer) {
+                       primitives: &Vec<Primitive>) {
         let try_split = self.screen_rect.size.width > 15 &&
                         self.screen_rect.size.height > 15 &&
-                        self.prim_count > 4;
+                        self.prim_count > 2;
 
         if try_split {
             let new_width = self.screen_rect.size.width / 2;
@@ -1095,11 +849,17 @@ impl Tile {
             let h_min = cmp::min(left.prim_count, right.prim_count);
             let v_min = cmp::min(top.prim_count, bottom.prim_count);
 
-            if h_min < self.prim_count || v_min < self.prim_count {
+            if (self.screen_rect.size.width > 63 || self.screen_rect.size.height > 63) || h_min < self.prim_count || v_min < self.prim_count {
                 self.layers.clear();
                 self.prim_count = 0;
 
                 if h_min < v_min {
+                    self.children.push(left);
+                    self.children.push(right);
+                } else if v_min < h_min {
+                    self.children.push(top);
+                    self.children.push(bottom);
+                } else if self.screen_rect.size.width > self.screen_rect.size.height {
                     self.children.push(left);
                     self.children.push(right);
                 } else {
@@ -1108,273 +868,51 @@ impl Tile {
                 }
 
                 for child in &mut self.children {
-                    child.split_if_needed(primitives, text_buffer);
-                }
-            }
-        }
-
-        for layer in &self.layers {
-            self.required_layers.push(layer.layer_index);
-
-            for primitive_key in &layer.primitives {
-                match *primitive_key {
-                    PrimitiveKey::Rectangle(index) => {
-                        self.required_rects.push(index);
-                    }
-                    PrimitiveKey::SetClip(index) => {
-                        self.required_clips.push(index);
-                    }
-                    PrimitiveKey::ClearClip(index) => {
-                        // Already handled by matching SetClip
-                    }
-                    PrimitiveKey::Image(index) => {
-                        self.required_images.push(index);
-                    }
-                    PrimitiveKey::Gradient(index) => {
-                        let gradient_prim = primitives.get_gradient(index);
-                        self.required_gradient_stops.push(gradient_prim.stops_index);
-                        self.required_gradients.push(index);
-                    }
-                    PrimitiveKey::Text(index) => {
-                        let text_prim = primitives.get_text(index);
-                        let glyph_prim = primitives.get_glyph(text_prim.glyph_index);
-                        text_buffer.push_text(index, &text_prim.xf_rect.local_rect, glyph_prim);
-                        //self.required_glyphs.insert(text_prim.glyph_index);
-                        self.required_texts.push(index);
-                    }
+                    child.split_if_needed(primitives);
                 }
             }
         }
     }
-
-    fn build(&mut self,
-             uniforms: &mut UniformBuffer,
-             text_buffer: &TextBuffer,
-             primitives: &PrimitiveBuffer,
-             layer_templates: &Vec<LayerTemplate>,
-             max_ubo_size: usize,
-             packed_tiles: &mut Vec<PackedTile>) {
-        if self.prim_count > 0 {
-            if !uniforms.layer_ubo.can_fit(&self.required_layers, UboBindLocation::Layers, max_ubo_size) {
-                let ubo = mem::replace(&mut uniforms.layer_ubo, Ubo::new());
-                uniforms.layer_ubos.push(ubo);
-            }
-
-            if !uniforms.rect_ubo.can_fit(&self.required_rects, UboBindLocation::Rectangles, max_ubo_size) {
-                let ubo = mem::replace(&mut uniforms.rect_ubo, Ubo::new());
-                uniforms.rect_ubos.push(ubo);
-            }
-
-            if !uniforms.clip_ubo.can_fit(&self.required_clips, UboBindLocation::Clips, max_ubo_size) {
-                let ubo = mem::replace(&mut uniforms.clip_ubo, Ubo::new());
-                uniforms.clip_ubos.push(ubo);
-            }
-
-            if !uniforms.image_ubo.can_fit(&self.required_images, UboBindLocation::Images, max_ubo_size) {
-                let ubo = mem::replace(&mut uniforms.image_ubo, Ubo::new());
-                uniforms.image_ubos.push(ubo);
-            }
-
-            if !uniforms.gradient_ubo.can_fit(&self.required_gradients, UboBindLocation::Gradients, max_ubo_size) {
-                let ubo = mem::replace(&mut uniforms.gradient_ubo, Ubo::new());
-                uniforms.gradient_ubos.push(ubo);
-            }
-
-            if !uniforms.gradient_stop_ubo.can_fit(&self.required_gradient_stops, UboBindLocation::GradientStops, max_ubo_size, |key| {
-                let gradient_stop_prim = primitives.get_gradient_stop(*key);
-                gradient_stop_prim.stops.len()
-            }) {
-                let ubo = mem::replace(&mut uniforms.gradient_stop_ubo, ArrayUbo::new());
-                uniforms.gradient_stop_ubos.push(ubo);
-            }
-
-            if !uniforms.text_ubo.can_fit(&self.required_texts, UboBindLocation::Texts, max_ubo_size) {
-                let ubo = mem::replace(&mut uniforms.text_ubo, Ubo::new());
-                uniforms.text_ubos.push(ubo);
-            }
-
-/*
-            if !uniforms.glyph_ubo.can_fit(&self.required_glyphs, UboBindLocation::Glyphs, max_ubo_size, |key| {
-                let glyph_prim = primitives.get_glyph(*key);
-                glyph_prim.glyphs.len()
-            }) {
-                let ubo = mem::replace(&mut uniforms.glyph_ubo, ArrayUbo::new());
-                uniforms.glyph_ubos.push(ubo);
-            }
-*/
-
-            let mut layer_cmd_lists = Vec::new();
-
-            let mut technique_params = TechniqueParams {
-                layer_count: self.layers.len(),
-                text_count: 0,
-                image_count: 0,
-                rect_count: 0,
-            };
-
-            for tile_layer in &self.layers {
-                let LayerTemplateIndex(layer_index) = tile_layer.layer_index;
-                let layer_template = &layer_templates[layer_index as usize].packed;
-
-                let packed_layer_index = uniforms.layer_ubo.maybe_insert_and_get_index(tile_layer.layer_index,
-                                                                                      layer_template);
-                let mut cmds_for_this_layer = Vec::new();
-                cmds_for_this_layer.push(PackedCommand::new(Command::SetLayer, packed_layer_index));
-
-                for prim_key in &tile_layer.primitives {
-                    match prim_key {
-                        &PrimitiveKey::Rectangle(index) => {
-                            technique_params.rect_count += 1;
-                            let rect_prim = primitives.get_rect(index);
-                            let rect_index = uniforms.rect_ubo.maybe_insert_and_get_index(index, &rect_prim.packed);
-                            //println!("\t\t\trect {:?}", rect_prim.packed);
-                            cmds_for_this_layer.push(PackedCommand::new(Command::DrawRectangle, rect_index));
-                        }
-                        &PrimitiveKey::SetClip(index) => {
-                            let clip_prim = primitives.get_clip(index);
-                            let clip_index = uniforms.clip_ubo.maybe_insert_and_get_index(index, &clip_prim.packed);
-                            //println!("\t\t\tset clip {:?}", clip_prim);
-                            cmds_for_this_layer.push(PackedCommand::new(Command::SetClip, clip_index));
-                        }
-                        &PrimitiveKey::ClearClip(index) => {
-                            let clip_prim = primitives.get_clip(index);
-                            let clip_index = uniforms.clip_ubo.maybe_insert_and_get_index(index, &clip_prim.packed);
-                            //println!("\t\t\tclear clip {:?}", clip_prim);
-                            cmds_for_this_layer.push(PackedCommand::new(Command::ClearClip, clip_index));
-                        }
-                        &PrimitiveKey::Image(index) => {
-                            technique_params.image_count += 1;
-                            let image_prim = primitives.get_image(index);
-                            let image_index = uniforms.image_ubo.maybe_insert_and_get_index(index, &image_prim.packed);
-                            //println!("\t\t\timage {:?}", image_prim.packed);
-                            cmds_for_this_layer.push(PackedCommand::new(Command::DrawImage, image_index));
-                        }
-                        &PrimitiveKey::Gradient(index) => {
-                            panic!("todo");
-                            let gradient_prim = primitives.get_gradient(index);
-                            let gradient_stop_prim = primitives.get_gradient_stop(gradient_prim.stops_index);
-
-                            let gradient_stop_index = uniforms.gradient_stop_ubo.maybe_insert_and_get_index(gradient_prim.stops_index,
-                                                                                                   &gradient_stop_prim.stops);
-
-                            let mut packed_gradient = gradient_prim.packed.clone();
-                            packed_gradient.stop_start_index = gradient_stop_index as u32;
-
-                            //println!("\t\t\tgradient {:?}", packed_gradient);
-
-                            let gradient_index = uniforms.gradient_ubo.maybe_insert_and_get_index(index, &packed_gradient);
-                            cmds_for_this_layer.push(PackedCommand::new(Command::DrawGradient, gradient_index));
-                        }
-                        &PrimitiveKey::Text(index) => {
-                            technique_params.text_count += 1;
-                            let text_prim = primitives.get_text(index);
-                            let glyph_prim = primitives.get_glyph(text_prim.glyph_index);
-
-                            let text = text_buffer.get(index);
-
-                            let mut packed_text = text_prim.packed.clone();
-                            packed_text.st0 = text.st0;
-                            packed_text.st1 = text.st1;
-                            packed_text.p0 = text.rect.origin;
-                            packed_text.p1 = text.rect.bottom_right();
-
-                            //println!("\t\t\ttext {:?}", packed_text);
-
-                            let text_index = uniforms.text_ubo.maybe_insert_and_get_index(index, &packed_text);
-                            cmds_for_this_layer.push(PackedCommand::new(Command::DrawText, text_index));
-                        }
-                    }
-                }
-
-                debug_assert!(cmds_for_this_layer.len() > 1);
-                layer_cmd_lists.push(cmds_for_this_layer);
-            }
-
-            let cmd_first_index = uniforms.cmd_ubo.len();
-
-            for layer in layer_cmd_lists.iter() {
-                for cmd in layer.iter() {
-                    uniforms.cmd_ubo.push(*cmd);
-                }
-            }
-
-            let cmd_count = uniforms.cmd_ubo.len() - cmd_first_index;
-
-            //println!("{:?} -> cmds = {:?}", self.screen_rect, &uniforms.cmd_ubo[cmd_first_index..cmd_first_index + cmd_count]);
-
-            let packed_tile = PackedTile {
-                rect: self.screen_rect,
-                layer_ubo_index: uniforms.layer_ubos.len(),
-                rect_ubo_index: uniforms.rect_ubos.len(),
-                clip_ubo_index: uniforms.clip_ubos.len(),
-                image_ubo_index: uniforms.image_ubos.len(),
-                gradient_ubo_index: uniforms.gradient_ubos.len(),
-                gradient_stop_ubo_index: uniforms.gradient_stop_ubos.len(),
-                text_ubo_index: uniforms.text_ubos.len(),
-                cmd_index: cmd_first_index,
-                cmd_count: cmd_count,
-                technique_params: technique_params,
-            };
-
-            packed_tiles.push(packed_tile);
-        }
-
-        for child in &mut self.children {
-            child.build(uniforms,
-                        text_buffer,
-                        primitives,
-                        layer_templates,
-                        max_ubo_size,
-                        packed_tiles);
-        }
-    }
-}
-
-pub struct TileFrame {
-    pub uniforms: UniformBuffer,
-    pub text_buffer: TextBuffer,
-    pub viewport_size: Size2D<i32>,
-    pub tiles: Vec<PackedTile>,
-    pub color_texture_id: TextureId,
-    pub mask_texture_id: TextureId,
-    //pub scroll_offset: Point2D<f32>,
-}
-
-pub struct TileBuilder {
-    layer_templates: Vec<LayerTemplate>,
-    layer_instances: Vec<LayerInstance>,
-    layer_stack: Vec<LayerTemplateIndex>,
-    primitives: PrimitiveBuffer,
-    device_pixel_ratio: f32,
-    color_texture_id: TextureId,
-    mask_texture_id: TextureId,
-    scroll_offset: Point2D<f32>,
 }
 
 impl TileBuilder {
-    pub fn new(device_pixel_ratio: f32, scroll_offset: Point2D<f32>) -> TileBuilder {
+    pub fn new(viewport_size: Size2D<f32>,
+               scroll_offset: Point2D<f32>,
+               techniques: Vec<TechniqueDescriptor>) -> TileBuilder {
         TileBuilder {
             layer_templates: Vec::new(),
             layer_instances: Vec::new(),
             layer_stack: Vec::new(),
-            primitives: PrimitiveBuffer::new(),
-            device_pixel_ratio: device_pixel_ratio,
+            primitives: Vec::new(),
             color_texture_id: TextureId(0),
             mask_texture_id: TextureId(0),
             scroll_offset: scroll_offset,
+            screen_rect: Rect::new(Point2D::zero(),
+                                   Size2D::new(viewport_size.width as i32, viewport_size.height as i32)),
+            techniques: techniques,
+            text_buffer: TextBuffer::new(TEXT_TARGET_SIZE),
         }
     }
 
-    fn transform_rect(&self, rect: &Rect<f32>) -> TransformedRect {
+    fn should_add_prim(&self, rect: &Rect<f32>) -> Option<TransformedRect> {
         let current_layer = *self.layer_stack.last().unwrap();
         let LayerTemplateIndex(current_layer_index) = current_layer;
         let layer = &self.layer_templates[current_layer_index as usize];
-        transform_rect(rect, &layer.transform)
+
+        let xf_rect = transform_rect(rect, &layer.transform);
+        if self.screen_rect.intersects(&xf_rect.screen_rect) {
+            Some(xf_rect)
+        } else {
+            None
+        }
     }
 
-    fn add_primitive(&mut self, prim_key: PrimitiveKey) {
+    fn add_primitive(&mut self,
+                     kind: PrimitiveKind,
+                     xf_rect: TransformedRect,
+                     packed: PackedPrimitive,
+                     is_opaque: bool) {
         let current_layer = *self.layer_stack.last().unwrap();
-        let LayerTemplateIndex(current_layer_index) = current_layer;
 
         if self.layer_instances.is_empty() ||
            self.layer_instances.last().unwrap().layer_index != current_layer {
@@ -1385,17 +923,22 @@ impl TileBuilder {
             self.layer_instances.push(instance);
         }
 
+        let prim_key = PrimitiveKey::new(kind, self.primitives.len());
+        self.primitives.push(Primitive {
+            xf_rect: xf_rect,
+            is_opaque: is_opaque,
+            packed: packed,
+        });
         self.layer_instances.last_mut().unwrap().primitives.push(prim_key);
     }
 
     pub fn add_gradient(&mut self,
-                        rect: Rect<f32>,
-                        start_point: &Point2D<f32>,
-                        end_point: &Point2D<f32>,
-                        stops: &ItemRange,
-                        auxiliary_lists: &AuxiliaryLists) {
-        return;
-
+                        _rect: Rect<f32>,
+                        _start_point: &Point2D<f32>,
+                        _end_point: &Point2D<f32>,
+                        _stops: &ItemRange,
+                        _auxiliary_lists: &AuxiliaryLists) {
+/*
         let source_stops = auxiliary_lists.gradient_stops(stops);
 
         let mut stops = Vec::new();
@@ -1413,6 +956,7 @@ impl TileBuilder {
                                                         stops_key,
                                                         source_stops.len() as u32);
         self.add_primitive(gradient_key);
+        */
     }
 
     pub fn add_text(&mut self,
@@ -1422,56 +966,71 @@ impl TileBuilder {
                     blur_radius: Au,
                     color: &ColorF,
                     src_glyphs: &[GlyphInstance],
-                    resource_cache: &ResourceCache,
+                    resource_cache: &mut ResourceCache,
                     frame_id: FrameId,
                     device_pixel_ratio: f32) {
         if color.a == 0.0 {
-            //println!("drop zero alpha text {:?}", rect);
             return
         }
 
-        // Logic below to pick the primary render item depends on len > 0!
-        assert!(src_glyphs.len() > 0);
-        let mut glyph_key = GlyphKey::new(font_key, size, blur_radius, src_glyphs[0].index);
-        let blur_offset = blur_radius.to_f32_px() * (BLUR_INFLATION_FACTOR as f32) / 2.0;
-        let mut glyphs = Vec::new();
+        if let Some(xf_rect) = self.should_add_prim(&rect) {
+            // Logic below to pick the primary render item depends on len > 0!
+            assert!(src_glyphs.len() > 0);
+            let mut glyph_key = GlyphKey::new(font_key, size, blur_radius, src_glyphs[0].index);
+            let blur_offset = blur_radius.to_f32_px() * (BLUR_INFLATION_FACTOR as f32) / 2.0;
+            let mut glyphs = Vec::new();
 
-        for glyph in src_glyphs {
-            glyph_key.index = glyph.index;
-            let image_info = resource_cache.get_glyph(&glyph_key, frame_id);
-            if let Some(image_info) = image_info {
-                // TODO(gw): Need a general solution to handle multiple texture pages per tile in WR2!
-                assert!(self.color_texture_id == TextureId(0) || self.color_texture_id == image_info.texture_id);
-                self.color_texture_id = image_info.texture_id;
-
-                let x = glyph.x + image_info.user_data.x0 as f32 / device_pixel_ratio - blur_offset;
-                let y = glyph.y - image_info.user_data.y0 as f32 / device_pixel_ratio - blur_offset;
-
-                let width = image_info.requested_rect.size.width as f32 / device_pixel_ratio;
-                let height = image_info.requested_rect.size.height as f32 / device_pixel_ratio;
-
-                let uv_rect = image_info.uv_rect();
-
-                glyphs.push(PackedGlyph {
-                    p0: Point2D::new(x, y),
-                    p1: Point2D::new(x + width, y + height),
-                    st0: uv_rect.top_left,
-                    st1: uv_rect.bottom_right,
-                });
+            // HACK HACK HACK - this is not great rasterizing glyphs here!
+            let mut resource_list = ResourceList::new(device_pixel_ratio);
+            for glyph in src_glyphs {
+                let glyph = Glyph::new(size, blur_radius, glyph.index);
+                resource_list.add_glyph(font_key, glyph);
             }
+            resource_cache.add_resource_list(&resource_list, frame_id);
+            resource_cache.raster_pending_glyphs(frame_id);
+
+            for glyph in src_glyphs {
+                glyph_key.index = glyph.index;
+                let image_info = resource_cache.get_glyph(&glyph_key, frame_id);
+                if let Some(image_info) = image_info {
+                    // TODO(gw): Need a general solution to handle multiple texture pages per tile in WR2!
+                    assert!(self.color_texture_id == TextureId(0) || self.color_texture_id == image_info.texture_id);
+                    self.color_texture_id = image_info.texture_id;
+
+                    let x = glyph.x + image_info.user_data.x0 as f32 / device_pixel_ratio - blur_offset;
+                    let y = glyph.y - image_info.user_data.y0 as f32 / device_pixel_ratio - blur_offset;
+
+                    let width = image_info.requested_rect.size.width as f32 / device_pixel_ratio;
+                    let height = image_info.requested_rect.size.height as f32 / device_pixel_ratio;
+
+                    let uv_rect = image_info.uv_rect();
+
+                    glyphs.push(PackedGlyph {
+                        p0: Point2D::new(x, y),
+                        p1: Point2D::new(x + width, y + height),
+                        st0: uv_rect.top_left,
+                        st1: uv_rect.bottom_right,
+                    });
+                }
+            }
+
+            if glyphs.is_empty() {
+                return;
+            }
+
+            let run = self.text_buffer.push_text(glyphs);
+
+            self.add_primitive(PrimitiveKind::Text,
+                               xf_rect,
+                               PackedPrimitive {
+                                   p0: run.rect.origin,
+                                   p1: run.rect.bottom_right(),
+                                   st0: run.st0,
+                                   st1: run.st1,
+                                   color: *color,
+                               },
+                               false);
         }
-
-        if glyphs.is_empty() {
-            return;
-        }
-
-        let glyphs_key = self.primitives.add_glyphs(glyphs);
-
-        let xf_rect = self.transform_rect(&rect);
-        let text_key = self.primitives.add_text(xf_rect,
-                                                *color,
-                                                glyphs_key);
-        self.add_primitive(text_key);
     }
 
     pub fn add_image(&mut self,
@@ -1479,17 +1038,31 @@ impl TileBuilder {
                      stretch_size: &Size2D<f32>,
                      image_key: ImageKey,
                      image_rendering: ImageRendering,
-                     resource_cache: &ResourceCache,
-                     frame_id: FrameId) {
-        let image_info = resource_cache.get_image(image_key, image_rendering, frame_id);
-        let uv_rect = image_info.uv_rect();
+                     resource_cache: &mut ResourceCache,
+                     frame_id: FrameId,
+                     device_pixel_ratio: f32) {
+        if let Some(xf_rect) = self.should_add_prim(&rect) {
+            let mut resource_list = ResourceList::new(device_pixel_ratio);
+            resource_list.add_image(image_key, image_rendering);
+            resource_cache.add_resource_list(&resource_list, frame_id);
 
-        assert!(self.color_texture_id == TextureId(0) || self.color_texture_id == image_info.texture_id);
-        self.color_texture_id = image_info.texture_id;
+            let image_info = resource_cache.get_image(image_key, image_rendering, frame_id);
+            let uv_rect = image_info.uv_rect();
 
-        let xf_rect = self.transform_rect(&rect);
-        let image_key = self.primitives.add_image(xf_rect, uv_rect.top_left, uv_rect.bottom_right);
-        self.add_primitive(image_key);
+            assert!(self.color_texture_id == TextureId(0) || self.color_texture_id == image_info.texture_id);
+            self.color_texture_id = image_info.texture_id;
+
+            self.add_primitive(PrimitiveKind::Image,
+                               xf_rect,
+                               PackedPrimitive {
+                                   p0: rect.origin,
+                                   p1: rect.bottom_right(),
+                                   st0: uv_rect.top_left,
+                                   st1: uv_rect.bottom_right,
+                                   color: ColorF::new(1.0, 1.0, 1.0, 1.0),
+                               },
+                               false);          // todo: handle this - big opt potential!
+        }
     }
 
     pub fn add_rectangle(&mut self,
@@ -1498,9 +1071,19 @@ impl TileBuilder {
         if color.a == 0.0 {
             return;
         }
-        let xf_rect = self.transform_rect(&rect);
-        let rect_key = self.primitives.add_rectangle(xf_rect, color);
-        self.add_primitive(rect_key);
+
+        if let Some(xf_rect) = self.should_add_prim(&rect) {
+            self.add_primitive(PrimitiveKind::Rectangle,
+                               xf_rect,
+                               PackedPrimitive {
+                                   p0: rect.origin,
+                                   p1: rect.bottom_right(),
+                                   st0: Point2D::zero(),
+                                   st1: Point2D::zero(),
+                                   color: color,
+                               },
+                               color.a == 1.0);
+        }
     }
 
     pub fn add_border(&mut self,
@@ -1580,10 +1163,9 @@ impl TileBuilder {
 
             let clip = Clip::from_border_radius(&rect,
                                                 radius,
-                                                &inner_radius,
-                                                self.device_pixel_ratio);
+                                                &inner_radius);
 
-            self.set_clip(clip);
+            //self.set_clip(clip);
         }
 
         self.add_rectangle(Rect::new(tl_outer,
@@ -1607,10 +1189,11 @@ impl TileBuilder {
                            bottom_color);
 
         if need_clip {
-            self.clear_clip();
+            //self.clear_clip();
         }
     }
 
+/*
     pub fn set_clip(&mut self, clip: Clip) {
         let xf_rect = self.transform_rect(&clip.rect);
         let clip_key = self.primitives.add_set_clip(xf_rect, clip);
@@ -1621,11 +1204,12 @@ impl TileBuilder {
         let clip_key = self.primitives.add_clear_clip();
         self.add_primitive(clip_key);
     }
+*/
 
     pub fn push_layer(&mut self,
                       rect: Rect<f32>,
                       transform: Matrix4,
-                      opacity: f32) {
+                      _: f32) {
         // TODO(gw): Not 3d transform correct!
         let transform = transform.translate(self.scroll_offset.x,
                                             self.scroll_offset.y,
@@ -1636,9 +1220,9 @@ impl TileBuilder {
         let template = LayerTemplate {
             transform: transform,
             packed: PackedLayer {
-                blend_info: [opacity, 0.0, 0.0, 0.0],
-                p0: rect.origin,
-                p1: rect.bottom_right(),
+                //blend_info: [opacity, 0.0, 0.0, 0.0],
+                //p0: rect.origin,
+                //p1: rect.bottom_right(),
                 inv_transform: transform.invert(),
                 screen_vertices: layer_rect.vertices,
             },
@@ -1652,54 +1236,70 @@ impl TileBuilder {
         self.layer_stack.pop();
     }
 
+    fn add_tile_to_batches(&self,
+                          tile: &Tile,
+                          batches: &mut Vec<TileBatch>) {
+        for child in &tile.children {
+            self.add_tile_to_batches(child, batches);
+        }
+
+        if tile.children.len() == 0 {
+            for technique in &self.techniques {
+                if technique.can_draw(tile) {
+                    //println!("technique {:?} draws {:?}", technique, tile.layers);
+
+                    let mut batch_index = batches.iter().position(|batch| {
+                        batch.shader_id == technique.shader_id
+                    });
+
+                    if batch_index.is_none() {
+                        batch_index = Some(batches.len());
+                        batches.push(TileBatch::new(technique.shader_id, technique.tile_layout));
+                    }
+
+                    let batch = &mut batches[batch_index.unwrap()];
+                    batch.data.add_tile(technique.tile_layout, tile, &self.primitives);
+
+                    return;
+                }
+            }
+
+            panic!("ERROR: Can't find technique for {:?}", tile.layers);
+        }
+    }
+
     // TODO(gw): This is grossly inefficient! But it should allow us to check the GPU
     //           perf on real world pages / demos, then we can worry about the CPU perf...
-    pub fn build(&self,
-                 viewport_size: Size2D<i32>,
-                 tile_size: Size2D<i32>,
-                 max_ubo_size: usize) -> TileFrame {
-        let mut text_buffer = TextBuffer::new(TEXT_TARGET_SIZE);
+    pub fn build(self) -> TileFrame {
+        let mut root_tile = Tile::new(self.screen_rect);
+        let mut layer_ubo = Ubo::new();
 
-        let mut root_tile = Tile::new(Rect::new(Point2D::zero(), viewport_size));
         for layer_instance in &self.layer_instances {
+            let LayerTemplateIndex(layer_index) = layer_instance.layer_index;
+            let layer_template = &self.layer_templates[layer_index as usize].packed;
+            layer_ubo.maybe_insert_and_get_index(layer_instance.layer_index, layer_template);
+
             for primitive_key in &layer_instance.primitives {
                 root_tile.add_primitive(*primitive_key,
                                         layer_instance.layer_index,
-                                        &self.primitives,
-                                        /*&mut text_buffer*/);
+                                        &self.primitives);
             }
         }
 
-        root_tile.split_if_needed(&self.primitives,
-                                  &mut text_buffer);
+        root_tile.split_if_needed(&self.primitives);
 
-        // Build UBO batches for each tile
-        let mut packed_tiles = Vec::new();
-        let mut uniforms = UniformBuffer::new(max_ubo_size);
-        root_tile.build(&mut uniforms,
-                        &text_buffer,
-                        &self.primitives,
-                        &self.layer_templates,
-                        max_ubo_size,
-                        &mut packed_tiles);
-        uniforms.finalize();
+        let mut batches = Vec::new();
+        self.add_tile_to_batches(&root_tile, &mut batches);
 
         TileFrame {
-            uniforms: uniforms,
-            text_buffer: text_buffer,
-            viewport_size: viewport_size,
-            tiles: packed_tiles,
+            viewport_size: self.screen_rect.size,
             color_texture_id: self.color_texture_id,
+            text_buffer: self.text_buffer,
             mask_texture_id: self.mask_texture_id,
-            //scroll_offset: Point2D::new(-viewport_rect.origin.x as f32,
-            //                            -viewport_rect.origin.y as f32),
+            layer_ubo: layer_ubo,
+            batches: batches,
         }
     }
-}
-
-#[inline]
-fn clamp(min: i32, value: i32, max: i32) -> i32 {
-    cmp::min(max, cmp::max(min, value))
 }
 
 fn transform_rect(rect: &Rect<f32>,

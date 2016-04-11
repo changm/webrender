@@ -3,41 +3,31 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use app_units::Au;
-use batch::{MAX_MATRICES_PER_BATCH, OffsetParams};
-use device::{TextureId, TextureFilter};
-use euclid::{Rect, Point2D, Point3D, Point4D, Size2D, Matrix4};
+use euclid::{Rect, Point2D, Size2D, Matrix4};
 use fnv::FnvHasher;
-use geometry::ray_intersects_rect;
-use internal_types::{AxisDirection, LowLevelFilterOp, CompositionOp, DrawListItemIndex};
-use internal_types::{BatchUpdateList, ChildLayerIndex, DrawListId};
-use internal_types::{CompositeBatchInfo, CompositeBatchJob, MaskRegion};
-use internal_types::{RendererFrame, StackingContextInfo, BatchInfo, DrawCall, StackingContextIndex};
-use internal_types::{ANGLE_FLOAT_TO_FIXED, MAX_RECT, BatchUpdate, BatchUpdateOp, DrawLayer};
-use internal_types::{DrawCommand, ClearInfo, RenderTargetId, DrawListGroupId, Glyph};
+use internal_types::{AxisDirection, LowLevelFilterOp, CompositionOp};
+use internal_types::{RendererFrame};
+use internal_types::{ANGLE_FLOAT_TO_FIXED, MAX_RECT};
 //use layer::{Layer, ScrollingState};
-//use node_compiler::NodeCompiler;
-//use primitive_list::{Clip, PrimitiveIdGenerator, PrimitiveList};
-use renderer::CompositionOpHelpers;
 use resource_cache::ResourceCache;
-use resource_list::{/*BuildRequiredResources,*/ ResourceList};
 use scene::{SceneStackingContext, ScenePipeline, Scene, SceneItem, SpecificSceneItem};
 use scoped_threadpool;
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
 use std::mem;
-use texture_cache::TexturePage;
 use util::{self, MatrixHelpers};
-//use tile_buffer::TileBuffer;
 use tiling::{Clip, TileBuilder};
 use webrender_traits::{AuxiliaryLists, PipelineId, Epoch, ScrollPolicy, ScrollLayerId};
 use webrender_traits::{StackingContext, FilterOp, ImageFormat, MixBlendMode};
 use webrender_traits::{ScrollEventPhase, ScrollLayerInfo};
 
+/*
 #[cfg(target_os = "macos")]
 const CAN_OVERSCROLL: bool = true;
 
 #[cfg(not(target_os = "macos"))]
 const CAN_OVERSCROLL: bool = false;
+*/
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
 pub struct FrameId(pub u32);
@@ -88,7 +78,7 @@ impl DrawListGroup {
 struct FlattenContext<'a> {
     resource_cache: &'a mut ResourceCache,
     scene: &'a Scene,
-    pipeline_sizes: &'a mut HashMap<PipelineId, Size2D<f32>>,
+    //pipeline_sizes: &'a mut HashMap<PipelineId, Size2D<f32>>,
     //current_draw_list_group: Option<DrawListGroup>,
     device_pixel_ratio: f32,
 }
@@ -415,21 +405,15 @@ pub struct Frame {
     pub pipeline_auxiliary_lists: HashMap<PipelineId,
                                           AuxiliaryLists,
                                           BuildHasherDefault<FnvHasher>>,
-    pub pending_updates: BatchUpdateList,
-    //pub root: Option<RenderTarget>,
-    //pub stacking_context_info: Vec<StackingContextInfo>,
-    //next_render_target_id: RenderTargetId,
-    //next_draw_list_group_id: DrawListGroupId,
-    //draw_list_groups: HashMap<DrawListGroupId, DrawListGroup, BuildHasherDefault<FnvHasher>>,
     root_scroll_layer_id: Option<ScrollLayerId>,
     id: FrameId,
 
     viewport_size: Size2D<i32>,
-    //primitive_id_generator: PrimitiveIdGenerator,
     tile_builder: Option<TileBuilder>,
-    tile_size: Size2D<i32>,
-    max_ubo_size: usize,
+    //tile_size: Size2D<i32>,
+    //max_ubo_size: usize,
     scroll_offset: Point2D<i32>,
+    techniques: Vec<TechniqueDescriptor>,
 }
 
 enum SceneItemKind<'a> {
@@ -557,55 +541,35 @@ impl StackingContextHelpers for StackingContext {
 }
 
 impl Frame {
-    pub fn new(max_ubo_size: usize, tile_size: Size2D<i32>) -> Frame {
+    pub fn new(_max_ubo_size: usize,
+               _tile_size: Size2D<i32>,
+               techniques: Vec<TechniqueDescriptor>) -> Frame {
         Frame {
             pipeline_epoch_map: HashMap::with_hasher(Default::default()),
-            pending_updates: BatchUpdateList::new(),
             pipeline_auxiliary_lists: HashMap::with_hasher(Default::default()),
-            //root: None,
-            //layers: HashMap::with_hasher(Default::default()),
-            //stacking_context_info: Vec::new(),
-            //next_render_target_id: RenderTargetId(0),
-            //next_draw_list_group_id: DrawListGroupId(0),
-            //draw_list_groups: HashMap::with_hasher(Default::default()),
             root_scroll_layer_id: None,
             id: FrameId(0),
 
             viewport_size: Size2D::zero(),
-            //primitive_id_generator: PrimitiveIdGenerator::new(),
             tile_builder: None,
-            tile_size: tile_size,
-            max_ubo_size: max_ubo_size,
+            //tile_size: tile_size,
+            //max_ubo_size: max_ubo_size,
             scroll_offset: Point2D::zero(),
+            techniques: techniques,
         }
     }
 
+/*
     pub fn reset(&mut self, resource_cache: &mut ResourceCache)
                  { //-> HashMap<ScrollLayerId, ScrollingState, BuildHasherDefault<FnvHasher>> {
-        //self.primitive_id_generator.reset();
-        //self.draw_list_groups.clear();
         self.pipeline_epoch_map.clear();
-        //self.stacking_context_info.clear();
-
-/*
-        if let Some(mut root) = self.root.take() {
-            root.reset(&mut self.pending_updates, resource_cache);
-        }
-*/
-
-        // Free any render targets from last frame.
-        // TODO: This should really re-use existing targets here...
-        /*let mut old_layer_scrolling_states = HashMap::with_hasher(Default::default());
-        for (layer_id, mut old_layer) in &mut self.layers.drain() {
-            old_layer.reset(&mut self.pending_updates);
-            old_layer_scrolling_states.insert(layer_id, old_layer.scrolling);
-        }*/
 
         // Advance to the next frame.
         self.id.0 += 1;
 
         //old_layer_scrolling_states
     }
+*/
 
 /*
     fn next_render_target_id(&mut self) -> RenderTargetId {
@@ -621,16 +585,11 @@ impl Frame {
     }
 */
 
-    pub fn pending_updates(&mut self) -> BatchUpdateList {
-        mem::replace(&mut self.pending_updates, BatchUpdateList::new())
-    }
-
+/*
     pub fn get_scroll_layer(&self,
                             cursor: &Point2D<f32>,
                             scroll_layer_id: ScrollLayerId,
                             parent_transform: &Matrix4) -> Option<ScrollLayerId> {
-        None
-        /*
         self.layers.get(&scroll_layer_id).and_then(|layer| {
             let transform = parent_transform.mul(&layer.local_transform);
 
@@ -669,13 +628,13 @@ impl Frame {
                     }
                 }
             }
-        })*/
-    }
+        })
+    }*/
 
     pub fn scroll(&mut self,
-                  mut delta: Point2D<f32>,
-                  cursor: Point2D<f32>,
-                  phase: ScrollEventPhase) {
+                  /*mut*/ delta: Point2D<f32>,
+                  _cursor: Point2D<f32>,
+                  _phase: ScrollEventPhase) {
         self.scroll_offset = self.scroll_offset + Point2D::new(delta.x as i32, delta.y as i32);
         /*
         let root_scroll_layer_id = match self.root_scroll_layer_id {
@@ -753,11 +712,11 @@ impl Frame {
     pub fn create(&mut self,
                   scene: &Scene,
                   resource_cache: &mut ResourceCache,
-                  pipeline_sizes: &mut HashMap<PipelineId, Size2D<f32>>,
+                  _pipeline_sizes: &mut HashMap<PipelineId, Size2D<f32>>,
                   device_pixel_ratio: f32) {
         if let Some(root_pipeline_id) = scene.root_pipeline_id {
             if let Some(root_pipeline) = scene.pipeline_map.get(&root_pipeline_id) {
-                let old_layer_scrolling_states = self.reset(resource_cache);
+                //let old_layer_scrolling_states = self.reset(resource_cache);
 
                 self.pipeline_auxiliary_lists = scene.pipeline_auxiliary_lists.clone();
 
@@ -803,7 +762,7 @@ impl Frame {
                     let mut context = FlattenContext {
                         resource_cache: resource_cache,
                         scene: scene,
-                        pipeline_sizes: pipeline_sizes,
+                        //pipeline_sizes: pipeline_sizes,
                         //current_draw_list_group: None,
                         device_pixel_ratio: device_pixel_ratio,
                     };
@@ -821,8 +780,10 @@ impl Frame {
                         pipeline_id: root_pipeline_id,
                     };
 
-                    let mut tile_builder = TileBuilder::new(device_pixel_ratio, Point2D::new(self.scroll_offset.x as f32,
-                                                                                             self.scroll_offset.y as f32));
+                    let mut tile_builder = TileBuilder::new(root_pipeline.viewport_size,
+                                                            Point2D::new(self.scroll_offset.x as f32,
+                                                                         self.scroll_offset.y as f32),
+                                                            self.techniques.clone());
                     tile_builder.push_layer(root_stacking_context.stacking_context.bounds,
                                             Matrix4::identity(),
                                             1.0);
@@ -864,6 +825,7 @@ impl Frame {
                           context: &mut FlattenContext,
                           _level: i32) {
 
+/*
         for item in scene_items {
             match item.specific {
                 SpecificSceneItem::StackingContext(..) |
@@ -886,7 +848,7 @@ impl Frame {
                                     resource_list.add_glyph(info.font_key, glyph);
                                 }
                             }
-                            SpecificDisplayItem::BoxShadow(ref info) => {
+                            SpecificDisplayItem::BoxShadow(ref _info) => {
                                 /*
                                 let box_rect = batch_builder::compute_box_shadow_rect(&info.box_bounds,
                                                                                       &info.offset,
@@ -913,7 +875,7 @@ impl Frame {
                             SpecificDisplayItem::WebGL(..) => {}
                             SpecificDisplayItem::Rectangle(..) => {}
                             SpecificDisplayItem::Gradient(..) => {}
-                            SpecificDisplayItem::Border(ref info) => {}
+                            SpecificDisplayItem::Border(..) => {}
                         }
                     }
 
@@ -921,23 +883,27 @@ impl Frame {
                     context.resource_cache.raster_pending_glyphs(self.id);
                 }
             }
-        }
+        }*/
 
         for item in scene_items {
             match item.specific {
                 SpecificSceneItem::DrawList(draw_list_id) => {
-                    let draw_list = context.resource_cache.get_draw_list(draw_list_id);
+                    // awful awful hack - fixme
+                    let draw_list_items = {
+                        let draw_list = context.resource_cache.get_draw_list_mut(draw_list_id);
+                        mem::replace(&mut draw_list.items, Vec::new())
+                    };
 
                     let auxiliary_lists = self.pipeline_auxiliary_lists
                                               .get(&info.pipeline_id)
                                               .expect("No auxiliary lists?!");
 
-                    for item in &draw_list.items {
+                    for item in &draw_list_items {
                         //let item_id = self.primitive_id_generator.next();
 
                         //primitive_list.push_complex_clip(auxiliary_lists.complex_clip_regions(&item.clip.complex));
                         match item.item {
-                            SpecificDisplayItem::WebGL(ref info) => {
+                            SpecificDisplayItem::WebGL(ref _info) => {
                                 println!("TODO: WebGL");
                                 /*
                                 builder.add_webgl_rectangle(&display_item.rect,
@@ -952,7 +918,8 @@ impl Frame {
                                                   info.image_key,
                                                   info.image_rendering,
                                                   context.resource_cache,
-                                                  self.id);
+                                                  self.id,
+                                                  context.device_pixel_ratio);
                             }
                             SpecificDisplayItem::Text(ref text_info) => {
                                 let glyphs = auxiliary_lists.glyph_instances(&text_info.glyphs);
@@ -970,17 +937,21 @@ impl Frame {
                                 // TODO: Find a better way to match transformed rect (via AABB tree)
                                 //       to the DL item...
 
+/*
                                 let clips = auxiliary_lists.complex_clip_regions(&item.clip.complex);
                                 if !clips.is_empty() {
-                                    builder.set_clip(Clip::from_clip_region(&clips[0], context.device_pixel_ratio));
+                                    builder.set_clip(Clip::from_clip_region(&clips[0]));
                                 };
+*/
 
                                 builder.add_rectangle(item.rect,
                                                       info.color);
 
+/*
                                 if !clips.is_empty() {
                                     builder.clear_clip();
                                 };
+                                */
                             }
                             SpecificDisplayItem::Gradient(ref info) => {
                                 builder.add_gradient(item.rect,
@@ -989,7 +960,7 @@ impl Frame {
                                                      &info.stops,
                                                      auxiliary_lists);
                             }
-                            SpecificDisplayItem::BoxShadow(ref info) => {
+                            SpecificDisplayItem::BoxShadow(ref _info) => {
 //                                println!("TODO: BoxShadow");
                                 /*
                                 builder.add_box_shadow(&info.box_bounds,
@@ -1010,6 +981,9 @@ impl Frame {
 
                         //primitive_list.pop_complex_clip();
                     }
+
+                    let draw_list = context.resource_cache.get_draw_list_mut(draw_list_id);
+                    draw_list.items = draw_list_items;
                 }
                 SpecificSceneItem::StackingContext(id, pipeline_id) => {
                     let stacking_context = context.scene
@@ -1048,9 +1022,9 @@ impl Frame {
                                                     .mul(&local_transform);
 
                     // Build world space perspective transform
-                    let perspective = Matrix4::identity().translate(origin.x, origin.y, 0.0)
-                                                         .mul(&stacking_context.stacking_context.perspective)
-                                                         .translate(-origin.x, -origin.y, 0.0);
+                    //let perspective = Matrix4::identity().translate(origin.x, origin.y, 0.0)
+                    //                                     .mul(&stacking_context.stacking_context.perspective)
+                    //                                     .translate(-origin.x, -origin.y, 0.0);
 
                     builder.push_layer(stacking_context.stacking_context.overflow,
                                        transform,
@@ -1065,7 +1039,7 @@ impl Frame {
 
                     builder.pop_layer();
                 }
-                SpecificSceneItem::Iframe(ref iframe_info) => {
+                SpecificSceneItem::Iframe(ref _iframe_info) => {
                     panic!("todo");
                     /*
                     let pipeline = context.scene
@@ -1126,7 +1100,7 @@ impl Frame {
                level: i32) {
         let _pf = util::ProfileScope::new("  flatten");
 
-        let (stacking_context, local_clip_rect, pipeline_id) = match scene_item {
+        let (stacking_context, local_clip_rect, _pipeline_id) = match scene_item {
             SceneItemKind::StackingContext(stacking_context, pipeline_id) => {
                 let stacking_context = &stacking_context.stacking_context;
 
@@ -1158,12 +1132,12 @@ impl Frame {
         if let Some(local_clip_rect) = local_clip_rect {
             let scene_items = scene_item.collect_scene_items(&context.scene);
             if !scene_items.is_empty() {
-                let composition_operations = {
-                    let auxiliary_lists = self.pipeline_auxiliary_lists
-                                              .get(&pipeline_id)
-                                              .expect("No auxiliary lists?!");
-                    stacking_context.composition_operations(auxiliary_lists)
-                };
+                //let composition_operations = {
+                //    let auxiliary_lists = self.pipeline_auxiliary_lists
+                //                              .get(&pipeline_id)
+                //                              .expect("No auxiliary lists?!");
+                //    stacking_context.composition_operations(auxiliary_lists)
+                //};
 
                 // Build world space transform
                 let origin = parent_info.offset_from_current_layer + stacking_context.bounds.origin;
@@ -1180,7 +1154,7 @@ impl Frame {
                                                      .mul(&stacking_context.perspective)
                                                      .translate(-origin.x, -origin.y, 0.0);
 
-                let mut info = FlattenInfo {
+                let info = FlattenInfo {
                     viewport_size: parent_info.viewport_size,
                     offset_from_origin: parent_info.offset_from_origin + stacking_context.bounds.origin,
                     offset_from_current_layer: parent_info.offset_from_current_layer + stacking_context.bounds.origin,
@@ -1193,6 +1167,7 @@ impl Frame {
                     perspective: perspective,
                 };
 
+/*
                 match (stacking_context.scroll_policy, stacking_context.scroll_layer_id) {
                     (ScrollPolicy::Fixed, _scroll_layer_id) => {
                         //debug_assert!(_scroll_layer_id.is_none());
@@ -1227,7 +1202,7 @@ impl Frame {
                     (ScrollPolicy::Scrollable, None) => {
                         // Nothing to do - use defaults as set above.
                     }
-                }
+                }*/
 
                 // When establishing a new 3D context, clear Z. This is only needed if there
                 // are child stacking contexts, otherwise it is a redundant clear.
@@ -1253,8 +1228,8 @@ impl Frame {
 
     pub fn build(&mut self,
                  resource_cache: &mut ResourceCache,
-                 thread_pool: &mut scoped_threadpool::Pool,
-                 device_pixel_ratio: f32)
+                 _thread_pool: &mut scoped_threadpool::Pool,
+                 _device_pixel_ratio: f32)
                  -> RendererFrame {
         // Traverse layer trees to calculate visible nodes
         /*
@@ -1413,28 +1388,7 @@ impl Frame {
         });
     }
 
-    pub fn update_batch_cache(&mut self) {
-        let _pf = util::ProfileScope::new("  update_batch_cache");
-
-        // Allocate and update VAOs
-        for (_, layer) in &mut self.layers {
-            for node in &mut layer.aabb_tree.nodes {
-                if node.is_visible {
-                    let compiled_node = node.compiled_node.as_mut().unwrap();
-                    if let Some(vertex_buffer) = compiled_node.vertex_buffer.take() {
-                        debug_assert!(compiled_node.vertex_buffer_id.is_none());
-
-                        self.pending_updates.push(BatchUpdate {
-                            id: vertex_buffer.id,
-                            op: BatchUpdateOp::Create(vertex_buffer.vertices),
-                        });
-
-                        compiled_node.vertex_buffer_id = Some(vertex_buffer.id);
-                    }
-                }
-            }
-        }
-    }*/
+*/
 
 /*
     pub fn collect_and_sort_visible_batches(&mut self,
@@ -1463,11 +1417,8 @@ impl Frame {
     }*/
 
     fn build_frame(&mut self) -> RendererFrame {
-        let tile_frame = self.tile_builder.as_ref().map(|tile_builder| {
-            tile_builder.build(self.viewport_size,
-                               self.tile_size,
-                               self.max_ubo_size)
-        });
+        let tile_builder = self.tile_builder.take();
+        let tile_frame = tile_builder.map(|builder| builder.build());
 
         let layers_bouncing_back = self.collect_layers_bouncing_back();
         RendererFrame::new(self.pipeline_epoch_map.clone(),
@@ -1477,7 +1428,7 @@ impl Frame {
 
     fn collect_layers_bouncing_back(&self)
                                     -> HashSet<ScrollLayerId, BuildHasherDefault<FnvHasher>> {
-        let mut layers_bouncing_back = HashSet::with_hasher(Default::default());
+        let layers_bouncing_back = HashSet::with_hasher(Default::default());
         /*
         for (scroll_layer_id, layer) in &self.layers {
             if layer.scrolling.started_bouncing_back {

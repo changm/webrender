@@ -15,9 +15,10 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
-use texture_cache::{TextureCache, TextureCacheItemId};
+use texture_cache::{TextureCache};
+use tiling::{TechniqueDescriptor};
 use webrender_traits::{ApiMsg, AuxiliaryLists, BuiltDisplayList, IdNamespace, RenderNotifier};
-use webrender_traits::{WebGLContextId, ScrollLayerId};
+use webrender_traits::{WebGLContextId};//, ScrollLayerId};
 use batch::new_id;
 use device::TextureId;
 use offscreen_gl_context::{NativeGLContext, GLContext, ColorAttachmentType, NativeGLContextMethods, NativeGLContextHandle};
@@ -49,20 +50,17 @@ impl RenderBackend {
                payload_tx: IpcBytesSender,
                result_tx: Sender<ResultMsg>,
                device_pixel_ratio: f32,
-               white_image_id: TextureCacheItemId,
-               dummy_mask_image_id: TextureCacheItemId,
                texture_cache: TextureCache,
                enable_aa: bool,
                notifier: Arc<Mutex<Option<Box<RenderNotifier>>>>,
                webrender_context_handle: Option<NativeGLContextHandle>,
                max_ubo_size: usize,
-               tile_size: Size2D<i32>) -> RenderBackend {
+               tile_size: Size2D<i32>,
+               techniques: Vec<TechniqueDescriptor>) -> RenderBackend {
         let mut thread_pool = scoped_threadpool::Pool::new(8);
 
         let resource_cache = ResourceCache::new(&mut thread_pool,
                                                 texture_cache,
-                                                white_image_id,
-                                                dummy_mask_image_id,
                                                 device_pixel_ratio,
                                                 enable_aa);
 
@@ -75,7 +73,9 @@ impl RenderBackend {
             device_pixel_ratio: device_pixel_ratio,
             resource_cache: resource_cache,
             scene: Scene::new(),
-            frame: Frame::new(max_ubo_size, tile_size),
+            frame: Frame::new(max_ubo_size,
+                              tile_size,
+                              techniques),
             next_namespace_id: IdNamespace(1),
             notifier: notifier,
             webrender_context_handle: webrender_context_handle,
@@ -365,8 +365,7 @@ impl RenderBackend {
     fn publish_frame(&mut self,
                      frame: RendererFrame,
                      profile_counters: &mut BackendProfileCounters) {
-        let pending_updates = self.frame.pending_updates();
-        let msg = ResultMsg::NewFrame(frame, pending_updates, profile_counters.clone());
+        let msg = ResultMsg::NewFrame(frame, profile_counters.clone());
         self.result_tx.send(msg).unwrap();
         profile_counters.reset();
 

@@ -9,7 +9,6 @@ extern crate lazy_static;
 #[macro_use]
 extern crate log;
 
-mod aabbtree;
 mod batch;
 mod batch_builder;
 mod debug_font_data;
@@ -17,17 +16,13 @@ mod debug_render;
 mod device;
 mod frame;
 mod freelist;
-mod geometry;
 mod internal_types;
-mod layer;
-mod node_compiler;
 mod profiler;
 mod render_backend;
 mod resource_cache;
 mod resource_list;
 mod scene;
 mod spring;
-mod tessellator;
 mod texture_cache;
 mod tiling;
 mod util;

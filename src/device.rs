@@ -5,7 +5,7 @@
 use euclid::Matrix4;
 use fnv::FnvHasher;
 use gleam::gl;
-use internal_types::{PackedColor, PackedVertex, PackedVertexForQuad};
+use internal_types::{PackedVertex, PackedVertexForQuad};
 use internal_types::{PackedVertexForTextureCacheUpdate, RenderTargetMode, TextureSampler};
 use internal_types::{VertexAttribute, DebugFontVertex, DebugColorVertex, FontVertex};
 //use notify::{self, Watcher};
@@ -1244,27 +1244,6 @@ impl Device {
         texture.fbo_ids.clear();
     }
 
-    pub fn init_texture_if_necessary(&mut self,
-                                     texture_id: TextureId,
-                                     width: u32,
-                                     height: u32,
-                                     format: ImageFormat,
-                                     filter: TextureFilter,
-                                     mode: RenderTargetMode) {
-        debug_assert!(self.inside_frame);
-        {
-            let texture = self.textures.get_mut(&texture_id).expect("Didn't find texture!");
-            if texture.format == format &&
-                    texture.width == width &&
-                    texture.height == height &&
-                    texture.filter == filter &&
-                    texture.mode == mode {
-                return
-            }
-        }
-        self.init_texture(texture_id, width, height, format, filter, mode, None)
-    }
-
     pub fn create_program(&mut self,
                           base_filename: &str,
                           include_filename: &str) -> ProgramId {
@@ -1459,55 +1438,6 @@ impl Device {
         debug_assert!(self.inside_frame);
         let UniformLocation(location) = uniform;
         gl::uniform_2f(location, x, y);
-    }
-
-    pub fn set_uniform_4f(&self,
-                          uniform: UniformLocation,
-                          x: f32,
-                          y: f32,
-                          z: f32,
-                          w: f32) {
-        debug_assert!(self.inside_frame);
-        let UniformLocation(location) = uniform;
-        gl::uniform_4f(location, x, y, z, w);
-    }
-
-    pub fn set_uniform_vec4_array(&self,
-                                  uniform: UniformLocation,
-                                  vectors: &[f32]) {
-        debug_assert!(self.inside_frame);
-        let UniformLocation(location) = uniform;
-        gl::uniform_4fv(location, vectors);
-    }
-
-    pub fn set_uniform_mat4_array(&self,
-                                  uniform: UniformLocation,
-                                  matrices: &[Matrix4]) {
-        debug_assert!(self.inside_frame);
-        let UniformLocation(location) = uniform;
-
-        // TODO(gw): Avoid alloc here by storing as 3x3 matrices at a higher level...
-        let mut floats = Vec::new();
-        for matrix in matrices {
-            floats.push(matrix.m11);
-            floats.push(matrix.m12);
-            floats.push(matrix.m13);
-            floats.push(matrix.m14);
-            floats.push(matrix.m21);
-            floats.push(matrix.m22);
-            floats.push(matrix.m23);
-            floats.push(matrix.m24);
-            floats.push(matrix.m31);
-            floats.push(matrix.m32);
-            floats.push(matrix.m33);
-            floats.push(matrix.m34);
-            floats.push(matrix.m41);
-            floats.push(matrix.m42);
-            floats.push(matrix.m43);
-            floats.push(matrix.m44);
-        }
-
-        gl::uniform_matrix_4fv(location, false, &floats);
     }
 
     fn set_uniforms(&self, program: &Program, transform: &Matrix4) {
@@ -1738,40 +1668,6 @@ impl Device {
         self.create_vao_with_vbos(format, main_vbo_id, aux_vbo_id, ibo_id, 0, true)
     }
 
-    #[inline(never)]
-    pub fn create_similar_vao(&mut self,
-                              format: VertexFormat,
-                              source_vao_id: VAOId,
-                              offset: gl::GLuint)
-                              -> VAOId {
-        let &VAO {
-            main_vbo_id,
-            aux_vbo_id,
-            ibo_id,
-            ..
-        } = self.vaos.get(&source_vao_id).expect("Bad VAO ID in `create_similar_vao()`!");
-        self.create_vao_with_vbos(format, main_vbo_id, aux_vbo_id, ibo_id, offset, false)
-    }
-
-/*
-    #[cfg(any(target_os = "android", target_os = "gonk"))]
-    pub fn create_quad_vertex_buffer(&mut self) -> VBOId {
-        let buffer_id = VBOId(gl::gen_buffers(1)[0]);
-        buffer_id.bind();
-        let mut buffer: Vec<_> =
-            (0..0x10000).flat_map(|_| QUAD_VERTICES.iter().cloned()).collect();
-        gl::buffer_data(gl::ARRAY_BUFFER, &buffer[..], gl::STATIC_DRAW);
-        buffer_id
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "gonk")))]
-    pub fn create_quad_vertex_buffer(&mut self) -> VBOId {
-        let buffer_id = VBOId(gl::gen_buffers(1)[0]);
-        buffer_id.bind();
-        gl::buffer_data(gl::ARRAY_BUFFER, &QUAD_VERTICES, gl::STATIC_DRAW);
-        buffer_id
-    }*/
-
     pub fn update_vao_main_vertices<V>(&mut self,
                                        vao_id: VAOId,
                                        vertices: &[V],
@@ -1782,19 +1678,6 @@ impl Device {
         debug_assert!(self.bound_vao == vao_id);
 
         vao.main_vbo_id.bind();
-        gl::buffer_data(gl::ARRAY_BUFFER, &vertices, usage_hint.to_gl());
-    }
-
-    pub fn update_vao_aux_vertices<V>(&mut self,
-                                      vao_id: VAOId,
-                                      vertices: &[V],
-                                      usage_hint: VertexUsageHint) {
-        debug_assert!(self.inside_frame);
-
-        let vao = self.vaos.get(&vao_id).unwrap();
-        debug_assert!(self.bound_vao == vao_id);
-
-        vao.aux_vbo_id.as_ref().unwrap().bind();
         gl::buffer_data(gl::ARRAY_BUFFER, &vertices, usage_hint.to_gl());
     }
 
@@ -1839,24 +1722,6 @@ impl Device {
                                                 instance_count: i32) {
         debug_assert!(self.inside_frame);
         gl::draw_elements_instanced(gl::TRIANGLES, index_count, gl::UNSIGNED_SHORT, 0, instance_count);
-    }
-
-    #[cfg(any(target_os = "android", target_os = "gonk"))]
-    pub fn draw_triangles_instanced_u16(&mut self,
-                                        first_vertex: i32,
-                                        index_count: i32,
-                                        instance_count: i32) {
-        debug_assert!(self.inside_frame);
-        gl::draw_arrays(gl::TRIANGLES, first_vertex * index_count, instance_count * index_count);
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "gonk")))]
-    pub fn draw_triangles_instanced_u16(&mut self,
-                                        first_vertex: i32,
-                                        index_count: i32,
-                                        instance_count: i32) {
-        debug_assert!(self.inside_frame);
-        gl::draw_arrays_instanced(gl::TRIANGLES, first_vertex as i32, index_count, instance_count);
     }
 
     pub fn delete_vao(&mut self, vao_id: VAOId) {

@@ -129,16 +129,11 @@ pub struct ResourceCache {
     texture_cache: TextureCache,
 
     pending_raster_jobs: Vec<GlyphRasterJob>,
-
-    white_image_id: TextureCacheItemId,
-    dummy_mask_image_id: TextureCacheItemId,
 }
 
 impl ResourceCache {
     pub fn new(thread_pool: &mut scoped_threadpool::Pool,
                texture_cache: TextureCache,
-               white_image_id: TextureCacheItemId,
-               dummy_mask_image_id: TextureCacheItemId,
                device_pixel_ratio: f32,
                enable_aa: bool) -> ResourceCache {
 
@@ -167,8 +162,6 @@ impl ResourceCache {
             texture_cache: texture_cache,
             pending_raster_jobs: Vec::new(),
             device_pixel_ratio: device_pixel_ratio,
-            white_image_id: white_image_id,
-            dummy_mask_image_id: dummy_mask_image_id,
             enable_aa: enable_aa,
         }
     }
@@ -366,9 +359,11 @@ impl ResourceCache {
         self.draw_lists.insert(DrawList::new(items, pipeline_id))
     }
 
+/*
     pub fn get_draw_list(&self, draw_list_id: DrawListId) -> &DrawList {
         self.draw_lists.get(draw_list_id)
     }
+*/
 
     pub fn get_draw_list_mut(&mut self, draw_list_id: DrawListId) -> &mut DrawList {
         self.draw_lists.get_mut(draw_list_id)
@@ -378,26 +373,11 @@ impl ResourceCache {
         self.draw_lists.free(draw_list_id);
     }
 
-    pub fn allocate_render_target(&mut self,
-                                  width: u32,
-                                  height: u32,
-                                  format: ImageFormat,
-                                  frame_id: FrameId)
-                                  -> TextureId {
-        self.texture_cache.allocate_render_target(width,
-                                                  height,
-                                                  format,
-                                                  frame_id)
-    }
-
-    pub fn free_old_render_targets(&mut self) {
-        self.texture_cache.free_old_render_targets()
-    }
-
     pub fn pending_updates(&mut self) -> TextureUpdateList {
         self.texture_cache.pending_updates()
     }
 
+/*
     #[inline]
     pub fn get_dummy_mask_image(&self) -> &TextureCacheItem {
         self.texture_cache.get(self.dummy_mask_image_id)
@@ -407,6 +387,7 @@ impl ResourceCache {
     pub fn get_dummy_color_image(&self) -> &TextureCacheItem {
         self.texture_cache.get(self.white_image_id)
     }
+*/
 
     #[inline]
     pub fn get_glyph(&self, glyph_key: &GlyphKey, frame_id: FrameId) -> Option<&TextureCacheItem> {
@@ -424,20 +405,20 @@ impl ResourceCache {
         self.texture_cache.get(image_info.texture_cache_id)
     }
 
+/*
     #[inline]
     pub fn get_raster(&self, raster_item: &RasterItem, frame_id: FrameId) -> &TextureCacheItem {
         let image_id = self.cached_rasters.get(raster_item, frame_id);
         self.texture_cache.get(*image_id)
     }
+*/
 
+/*
     #[inline]
     pub fn get_webgl_texture(&self, context_id: &WebGLContextId) -> TextureId {
         self.webgl_textures.get(context_id).unwrap().clone()
     }
-
-    pub fn device_pixel_ratio(&self) -> f32 {
-        self.device_pixel_ratio
-    }
+*/
 
     pub fn expire_old_resources(&mut self, frame_id: FrameId) {
         self.cached_glyphs.expire_old_resources(&mut self.texture_cache, frame_id);
