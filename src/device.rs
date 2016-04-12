@@ -544,7 +544,7 @@ impl Program {
         gl::attach_shader(self.id, fs_id);
 
         gl::bind_attrib_location(self.id, VertexAttribute::Position as gl::GLuint, "aPosition");
-        gl::bind_attrib_location(self.id,
+/*      gl::bind_attrib_location(self.id,
                                  VertexAttribute::PositionRect as gl::GLuint,
                                  "aPositionRect");
         gl::bind_attrib_location(self.id,
@@ -558,11 +558,11 @@ impl Program {
                                  "aColorRectBR");
         gl::bind_attrib_location(self.id,
                                  VertexAttribute::ColorRectBL as gl::GLuint,
-                                 "aColorRectBL");
+                                 "aColorRectBL");*/
         gl::bind_attrib_location(self.id,
                                  VertexAttribute::ColorTexCoordRectTop as gl::GLuint,
                                  "aColorTexCoordRectTop");
-        gl::bind_attrib_location(self.id,
+/*      gl::bind_attrib_location(self.id,
                                  VertexAttribute::MaskTexCoordRectTop as gl::GLuint,
                                  "aMaskTexCoordRectTop");
         gl::bind_attrib_location(self.id,
@@ -587,6 +587,7 @@ impl Program {
                                  VertexAttribute::SourceTextureSize as gl::GLuint,
                                  "aSourceTextureSize");
         gl::bind_attrib_location(self.id, VertexAttribute::Misc as gl::GLuint, "aMisc");
+*/
 
         gl::link_program(self.id);
         if gl::get_program_iv(self.id, gl::LINK_STATUS) == (0 as gl::GLint) {
@@ -598,6 +599,7 @@ impl Program {
             }
             false
         } else {
+            //println!("{}", gl::get_program_info_log(self.id));
             true
         }
     }
@@ -924,6 +926,7 @@ impl Device {
 
             None
         } else {
+            //println!("{}", gl::get_shader_info_log(id));
             Some(id)
         }
     }

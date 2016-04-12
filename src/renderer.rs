@@ -135,7 +135,7 @@ impl UboInfo for TileLayout {
             TileLayout::L4P2 => "Tiles_L4P2",
             TileLayout::L4P3 => "Tiles_L4P3",
             TileLayout::L4P4 => "Tiles_L4P4",
-            TileLayout::L4P7 => "Tiles_L4P7",
+            TileLayout::L4P6 => "Tiles_L4P6",
         }
     }
 }
@@ -192,7 +192,7 @@ impl TileShader {
                 gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
                 tiles.len()
             }
-            &TileData::L4P7(ref tiles) => {
+            &TileData::L4P6(ref tiles) => {
                 gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
                 tiles.len()
             }
@@ -283,6 +283,13 @@ impl Renderer {
         let blur_program_id = ProgramId(0);//device.create_program("blur");
         let max_raster_op_size = MAX_RASTER_OP_SIZE * options.device_pixel_ratio as u32;
         let max_ubo_size = gl::get_integer_v(gl::MAX_UNIFORM_BLOCK_SIZE) as usize;
+        //println!("MAX_UBO_SIZE = {}", max_ubo_size);
+
+        //let max_vertex_outputs = gl::get_integer_v(gl::MAX_VERTEX_OUTPUT_COMPONENTS);
+        //println!("max_vertex_outputs = {}", max_vertex_outputs);
+
+        //let max_fragment_inputs = gl::get_integer_v(gl::MAX_FRAGMENT_INPUT_COMPONENTS);
+        //println!("max_fragment_inputs = {}", max_fragment_inputs);
 
         let text_program_id = device.create_program("text", "shared_other");
 
@@ -328,13 +335,13 @@ impl Renderer {
                         &[],
                         TileLayout::L4P4,
                         &mut device);
-        shader_list.add("tile_generic_prim7",
-                        7,
+        shader_list.add("tile_generic_prim6",
+                        6,
                         TechniqueCountKind::LessEqual,
                         1,
                         TechniqueCountKind::Equal,
                         &[],
-                        TileLayout::L4P7,
+                        TileLayout::L4P6,
                         &mut device);
         shader_list.add("tile_unhandled",
                         0,

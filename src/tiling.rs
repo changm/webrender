@@ -33,7 +33,7 @@ pub enum TileLayout {
     L4P2,
     L4P3,
     L4P4,
-    L4P7,
+    L4P6,
 }
 
 #[derive(Debug)]
@@ -74,11 +74,11 @@ pub struct TileL4P4 {
 }
 
 #[derive(Debug)]
-pub struct TileL4P7 {
+pub struct TileL4P6 {
     pub rect: Rect<i32>,
     pub layer_info: [LayerTemplateIndex; 4],
     pub prim_info: [PrimitiveKind; 8],
-    pub prims: [PackedPrimitive; 7],
+    pub prims: [PackedPrimitive; 6],
 }
 
 #[derive(Debug)]
@@ -88,7 +88,7 @@ pub enum TileData {
     L4P2(Vec<TileL4P2>),
     L4P3(Vec<TileL4P3>),
     L4P4(Vec<TileL4P4>),
-    L4P7(Vec<TileL4P7>),
+    L4P6(Vec<TileL4P6>),
 }
 
 trait PrimitiveHelpers {
@@ -216,10 +216,10 @@ impl TileData {
                 });
                 tiles.push(packed_tile);
             }
-            TileData::L4P7(ref mut tiles) => {
-                assert!(layout == TileLayout::L4P7);
+            TileData::L4P6(ref mut tiles) => {
+                assert!(layout == TileLayout::L4P6);
                 let tile_layer = &tile.layers[0];
-                let mut packed_tile = TileL4P7 {
+                let mut packed_tile = TileL4P6 {
                     rect: tile.screen_rect,
                     layer_info: [
                                   tile_layer.layer_index,
@@ -239,7 +239,7 @@ impl TileData {
                                ],
                     prims: unsafe { mem::uninitialized() },
                 };
-                tile.visit_primitives(7, |key, index| {
+                tile.visit_primitives(6, |key, index| {
                     packed_tile.prim_info[index] = key.kind;
                     packed_tile.prims[index] = primitives.get(key);
                 });
@@ -263,7 +263,7 @@ impl TileBatch {
             TileLayout::L4P2 => TileData::L4P2(Vec::new()),
             TileLayout::L4P3 => TileData::L4P3(Vec::new()),
             TileLayout::L4P4 => TileData::L4P4(Vec::new()),
-            TileLayout::L4P7 => TileData::L4P7(Vec::new()),
+            TileLayout::L4P6 => TileData::L4P6(Vec::new()),
         };
 
         TileBatch {
