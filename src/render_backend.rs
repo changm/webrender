@@ -16,7 +16,7 @@ use std::io::{Cursor, Read};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
 use texture_cache::{TextureCache};
-use tiling::{TechniqueDescriptor};
+use tiling::{ShaderId, TechniqueDescriptor};
 use webrender_traits::{ApiMsg, AuxiliaryLists, BuiltDisplayList, IdNamespace, RenderNotifier};
 use webrender_traits::{WebGLContextId};//, ScrollLayerId};
 use batch::new_id;
@@ -42,6 +42,8 @@ pub struct RenderBackend {
     webrender_context_handle: Option<NativeGLContextHandle>,
     webgl_contexts: HashMap<WebGLContextId, GLContext<NativeGLContext>>,
     current_bound_webgl_context_id: Option<WebGLContextId>,
+
+    allow_splitting: bool,
 }
 
 impl RenderBackend {
@@ -56,7 +58,9 @@ impl RenderBackend {
                webrender_context_handle: Option<NativeGLContextHandle>,
                max_ubo_size: usize,
                tile_size: Size2D<i32>,
-               techniques: Vec<TechniqueDescriptor>) -> RenderBackend {
+               techniques: Vec<TechniqueDescriptor>,
+               allow_splitting: bool,
+               composite_shader_id: ShaderId) -> RenderBackend {
         let mut thread_pool = scoped_threadpool::Pool::new(8);
 
         let resource_cache = ResourceCache::new(&mut thread_pool,
@@ -75,12 +79,14 @@ impl RenderBackend {
             scene: Scene::new(),
             frame: Frame::new(max_ubo_size,
                               tile_size,
-                              techniques),
+                              techniques,
+                              composite_shader_id),
             next_namespace_id: IdNamespace(1),
             notifier: notifier,
             webrender_context_handle: webrender_context_handle,
             webgl_contexts: HashMap::new(),
             current_bound_webgl_context_id: None,
+            allow_splitting: allow_splitting,
         }
     }
 
@@ -352,7 +358,8 @@ impl RenderBackend {
     fn render(&mut self) -> RendererFrame {
         let frame = self.frame.build(&mut self.resource_cache,
                                      &mut self.thread_pool,
-                                     self.device_pixel_ratio);
+                                     self.device_pixel_ratio,
+                                     self.allow_splitting);
 
         let pending_update = self.resource_cache.pending_updates();
         if !pending_update.updates.is_empty() {

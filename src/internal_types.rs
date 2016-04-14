@@ -92,6 +92,7 @@ pub type DrawListId = FreeListItemId;
 pub enum TextureSampler {
     Color,
     Mask,
+    Tiling,
 }
 
 pub enum VertexAttribute {

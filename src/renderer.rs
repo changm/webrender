@@ -18,6 +18,7 @@ use ipc_channel::ipc;
 use profiler::{Profiler, BackendProfileCounters};
 use profiler::{RendererProfileTimers, RendererProfileCounters};
 use render_backend::RenderBackend;
+use std::cmp;
 use std::f32;
 use std::mem;
 use std::path::PathBuf;
@@ -26,7 +27,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::usize;
 use texture_cache::{BorderType, TextureCache, TextureInsertOp};
-use tiling::{TextBuffer, TechniqueDescriptor, TechniqueCountKind, TileFrame, TileLayout, PrimitiveKind, ShaderId, TileData};
+use tiling::{TextBuffer, TechniqueDescriptor, TechniqueCountKind, TileFrame, TileLayout, PrimitiveKind, ShaderId, RenderBatchData, RenderPass};
 use time::precise_time_ns;
 use webrender_traits::{ColorF, Epoch, PipelineId, RenderNotifier};
 use webrender_traits::{ImageFormat, MixBlendMode, RenderApiSender};
@@ -136,6 +137,7 @@ impl UboInfo for TileLayout {
             TileLayout::L4P3 => "Tiles_L4P3",
             TileLayout::L4P4 => "Tiles_L4P4",
             TileLayout::L4P6 => "Tiles_L4P6",
+            TileLayout::Composite => "Tiles_Composite",
         }
     }
 }
@@ -163,46 +165,66 @@ impl TileShader {
         }
     }
 
-    fn draw(&self, device: &mut Device, projection: &Matrix4, batch: &TileData) {
-        let ubos = gl::gen_buffers(1);
-        let tile_ubo = ubos[0];
-
-        device.bind_program(self.program_id, projection);
-
-        gl::bind_buffer(gl::UNIFORM_BUFFER, tile_ubo);
+    fn draw(&self,
+            device: &mut Device,
+            projection: &Matrix4,
+            batch: &RenderBatchData,
+            initial_color: &ColorF) {
+        // TODO(gw): Ugh this is really messy...!
 
         let len = match batch {
-            &TileData::Empty(ref tiles) => {
-                gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
-                tiles.len()
-            }
-            &TileData::L4P1(ref tiles) => {
-                gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
-                tiles.len()
-            }
-            &TileData::L4P2(ref tiles) => {
-                gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
-                tiles.len()
-            }
-            &TileData::L4P3(ref tiles) => {
-                gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
-                tiles.len()
-            }
-            &TileData::L4P4(ref tiles) => {
-                gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
-                tiles.len()
-            }
-            &TileData::L4P6(ref tiles) => {
-                gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
-                tiles.len()
-            }
+            &RenderBatchData::Empty(ref tiles) => tiles.len(),
+            &RenderBatchData::L4P1(ref tiles) => tiles.len(),
+            &RenderBatchData::L4P2(ref tiles) => tiles.len(),
+            &RenderBatchData::L4P3(ref tiles) => tiles.len(),
+            &RenderBatchData::L4P4(ref tiles) => tiles.len(),
+            &RenderBatchData::L4P6(ref tiles) => tiles.len(),
+            &RenderBatchData::Composite(ref tiles) => tiles.len(),
         };
 
-        gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_TILES, tile_ubo);
+        if len > 0 {
+            let ubos = gl::gen_buffers(1);
+            let tile_ubo = ubos[0];
 
-        device.draw_indexed_triangles_instanced_u16(6, len as i32);
+            device.bind_program(self.program_id, projection);
+            gl::bind_buffer(gl::UNIFORM_BUFFER, tile_ubo);
 
-        gl::delete_buffers(&ubos);
+            // todo(gw): hack - pre-calculate this
+            let u_initial_color = device.get_uniform_location(self.program_id, "uInitialColor");
+            device.set_uniform_4f(u_initial_color,
+                                  initial_color.r,
+                                  initial_color.g,
+                                  initial_color.b,
+                                  initial_color.a);
+
+            match batch {
+                &RenderBatchData::Empty(ref tiles) => {
+                    gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
+                }
+                &RenderBatchData::L4P1(ref tiles) => {
+                    gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
+                }
+                &RenderBatchData::L4P2(ref tiles) => {
+                    gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
+                }
+                &RenderBatchData::L4P3(ref tiles) => {
+                    gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
+                }
+                &RenderBatchData::L4P4(ref tiles) => {
+                    gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
+                }
+                &RenderBatchData::L4P6(ref tiles) => {
+                    gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
+                }
+                &RenderBatchData::Composite(ref tiles) => {
+                    gl::buffer_data(gl::UNIFORM_BUFFER, tiles, gl::STATIC_DRAW);
+                }
+            }
+
+            gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_TILES, tile_ubo);
+            device.draw_indexed_triangles_instanced_u16(6, len as i32);
+            gl::delete_buffers(&ubos);
+        }
     }
 }
 
@@ -235,6 +257,10 @@ pub struct Renderer {
     u_direction: UniformLocation,
 
     shader_list: TileShaderList,
+    empty_shader: TileShader,
+    error_shader: TileShader,
+    composite_shader: TileShader,
+    composite_shader_id: ShaderId,
     text_program_id: ProgramId,
 
     notifier: Arc<Mutex<Option<Box<RenderNotifier>>>>,
@@ -251,6 +277,7 @@ pub struct Renderer {
     raster_op_target_a8: TextureId,
     raster_op_target_rgba8: TextureId,
     text_composite_target: TextureId,
+    tiling_render_targets: [TextureId; 2],
 
     gpu_profile_text: GpuProfile,
     gpu_profile_tiling: GpuProfile,
@@ -293,16 +320,11 @@ impl Renderer {
 
         let text_program_id = device.create_program("text", "shared_other");
 
+        let empty_shader = TileShader::new("tile_empty", TileLayout::Empty, &mut device);
+        let error_shader = TileShader::new("tile_unhandled", TileLayout::Empty, &mut device);
+
         let mut shader_list = TileShaderList::new();
 
-        shader_list.add("tile_empty",
-                        0,
-                        TechniqueCountKind::Equal,
-                        0,
-                        TechniqueCountKind::DontCare,
-                        &[],
-                        TileLayout::Empty,
-                        &mut device);
         shader_list.add("tile_rect",
                         1,
                         TechniqueCountKind::Equal,
@@ -343,14 +365,10 @@ impl Renderer {
                         &[],
                         TileLayout::L4P6,
                         &mut device);
-        shader_list.add("tile_unhandled",
-                        0,
-                        TechniqueCountKind::DontCare,
-                        0,
-                        TechniqueCountKind::DontCare,
-                        &[],
-                        TileLayout::Empty,
-                        &mut device);
+
+        // hack hack hack
+        let composite_shader_id = ShaderId(shader_list.shaders.len() as u32);
+        let composite_shader = TileShader::new("tile_composite", TileLayout::Composite, &mut device);
 
         let texture_ids = device.create_texture_ids(1024);
         let mut texture_cache = TextureCache::new(texture_ids);
@@ -455,6 +473,7 @@ impl Renderer {
         let context_handle = NativeGLContext::current_handle();
 
         let tile_size = options.tile_size;
+        let allow_splitting = options.allow_splitting;
         let (device_pixel_ratio, enable_aa) = (options.device_pixel_ratio, options.enable_aa);
         let payload_tx_for_backend = payload_tx.clone();
         let descriptors = shader_list.descriptors.clone();
@@ -470,7 +489,9 @@ impl Renderer {
                                                  context_handle,
                                                  max_ubo_size,
                                                  tile_size,
-                                                 descriptors);
+                                                 descriptors,
+                                                 allow_splitting,
+                                                 composite_shader_id);
             backend.run();
         });
 
@@ -489,6 +510,10 @@ impl Renderer {
             //box_shadow_program_id: box_shadow_program_id,
             blur_program_id: blur_program_id,
             shader_list: shader_list,
+            composite_shader_id: composite_shader_id,
+            composite_shader: composite_shader,
+            empty_shader: empty_shader,
+            error_shader: error_shader,
             text_program_id: text_program_id,
             u_blend_params: UniformLocation::invalid(),
             u_filter_params: UniformLocation::invalid(),
@@ -509,6 +534,7 @@ impl Renderer {
             raster_op_target_a8: raster_op_target_a8,
             raster_op_target_rgba8: raster_op_target_rgba8,
             text_composite_target: text_composite_target,
+            tiling_render_targets: [TextureId(0), TextureId(0)],
             max_raster_op_size: max_raster_op_size,
             gpu_profile_text: GpuProfile::new(),
             gpu_profile_tiling: GpuProfile::new(),
@@ -1295,60 +1321,126 @@ impl Renderer {
     }
 */
 
+    fn draw_tiling_pass(&mut self, pass: &RenderPass, projection: &Matrix4, initial_color: &ColorF) {
+        for (shader_id, batch) in &pass.batches {
+            let shader_id = *shader_id;
+            if shader_id == self.composite_shader_id {
+                self.composite_shader.draw(&mut self.device, &projection, &batch.data, initial_color);
+            } else {
+                let ShaderId(shader_index) = shader_id;
+                let shader = &self.shader_list.shaders[shader_index as usize];
+                shader.draw(&mut self.device, &projection, &batch.data, initial_color);
+            }
+        }
+    }
+
     fn draw_tile_frame(&mut self,
                        tile_frame: &TileFrame,
                        framebuffer_size: &Size2D<u32>) {
-        let projection = Matrix4::ortho(0.0,
-                                        tile_frame.viewport_size.width as f32,
-                                        tile_frame.viewport_size.height as f32,
-                                        0.0,
-                                        ORTHO_NEAR_PLANE,
-                                        ORTHO_FAR_PLANE);
-
         self.gpu_profile_text.begin();
 
-        gl::disable(gl::BLEND);
+        gl::disable(gl::STENCIL_TEST);
         gl::depth_mask(false);
         gl::stencil_mask(0xff);
-        gl::disable(gl::STENCIL_TEST);
 
-        self.draw_text(&tile_frame.text_buffer, tile_frame.color_texture_id);
+        if tile_frame.text_buffer.glyphs.len() > 0 {
+            gl::disable(gl::BLEND);
+            self.draw_text(&tile_frame.text_buffer, tile_frame.color_texture_id);
+        }
 
         self.gpu_profile_text.end();
         self.gpu_profile_tiling.begin();
 
-        gl::enable(gl::BLEND);
-        self.device.bind_render_target(None);
-        gl::viewport(0, 0, framebuffer_size.width as i32, framebuffer_size.height as i32);
+        if tile_frame.passes.len() > 0 {
+            let render_target_pixel_size = tile_frame.render_target_size * self.device_pixel_ratio as u32;
 
-        self.device.bind_mask_texture(self.text_composite_target);
-        self.device.bind_vao(self.quad_vao_id);
+            if self.tiling_render_targets[0] == TextureId(0) {
+                // hack hack hack
+                let ids = self.device.create_texture_ids(2);
+                self.tiling_render_targets[0] = ids[0];
+                self.tiling_render_targets[1] = ids[1];
+                self.device.init_texture(self.tiling_render_targets[0],
+                                         render_target_pixel_size,
+                                         render_target_pixel_size,
+                                         ImageFormat::RGBA8,
+                                         TextureFilter::Linear,
+                                         RenderTargetMode::RenderTarget,
+                                         None);
 
-        let ubos = gl::gen_buffers(1);
-        let layer_ubo = ubos[0];
+                self.device.init_texture(self.tiling_render_targets[1],
+                                         render_target_pixel_size,
+                                         render_target_pixel_size,
+                                         ImageFormat::RGBA8,
+                                         TextureFilter::Linear,
+                                         RenderTargetMode::RenderTarget,
+                                         None);
+            }
 
-        gl::bind_buffer(gl::UNIFORM_BUFFER, layer_ubo);
-        gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.layer_ubo.items, gl::STATIC_DRAW);
-        gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_LAYERS, layer_ubo);
+            gl::clear_color(1.0, 1.0, 1.0, 1.0);
+            gl::viewport(0, 0, render_target_pixel_size as i32, render_target_pixel_size as i32);
+            self.device.bind_render_target(Some(self.tiling_render_targets[0]));
+            gl::clear(gl::COLOR_BUFFER_BIT);
+            self.device.bind_render_target(Some(self.tiling_render_targets[1]));
+            gl::clear(gl::COLOR_BUFFER_BIT);
 
-        //println!("render {:?}", tile_frame.batches);
+            self.device.bind_mask_texture(self.text_composite_target);
+            self.device.bind_vao(self.quad_vao_id);
+            let ubos = gl::gen_buffers(1);
+            let layer_ubo = ubos[0];
 
-        for batch in &tile_frame.batches {
-            let ShaderId(shader_index) = batch.shader_id;
-            let shader = &self.shader_list.shaders[shader_index as usize];
-            shader.draw(&mut self.device, &projection, &batch.data);
+            gl::bind_buffer(gl::UNIFORM_BUFFER, layer_ubo);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &tile_frame.layer_ubo.items, gl::STATIC_DRAW);
+            gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_LAYERS, layer_ubo);
+            gl::enable(gl::BLEND);
+
+            let pass_count = tile_frame.passes.len();
+            let mut current_target_index = 0;
+            for pass_index in 0..pass_count {
+                let pass_index = pass_count - pass_index - 1;
+
+                self.device.bind_tiling_texture(self.tiling_render_targets[1 - current_target_index]);
+
+                let (pw, ph, initial_color) = if pass_index == 0 {
+                    self.device.bind_render_target(None);
+                    gl::viewport(0, 0, framebuffer_size.width as i32, framebuffer_size.height as i32);
+                    (tile_frame.viewport_size.width,
+                     tile_frame.viewport_size.height,
+                     ColorF::new(1.0, 1.0, 1.0, 1.0))
+                } else {
+                    self.device.bind_render_target(Some(self.tiling_render_targets[current_target_index]));
+                    // hack hack hack ugh
+                    gl::viewport(0, 0, render_target_pixel_size as i32, render_target_pixel_size as i32);
+                    (tile_frame.render_target_size as i32,
+                     tile_frame.render_target_size as i32,
+                     ColorF::new(0.0, 0.0, 0.0, 0.0))
+                };
+
+                let projection = Matrix4::ortho(0.0,
+                                                pw as f32,
+                                                ph as f32,
+                                                0.0,
+                                                ORTHO_NEAR_PLANE,
+                                                ORTHO_FAR_PLANE);
+
+                current_target_index = 1 - current_target_index;
+                self.draw_tiling_pass(&tile_frame.passes[pass_index], &projection, &initial_color);
+            }
+
+            gl::delete_buffers(&ubos);
+
+            let projection = Matrix4::ortho(0.0,
+                                            tile_frame.viewport_size.width as f32,
+                                            tile_frame.viewport_size.height as f32,
+                                            0.0,
+                                            ORTHO_NEAR_PLANE,
+                                            ORTHO_FAR_PLANE);
+
+            let initial_color = ColorF::new(1.0, 1.0, 1.0, 1.0);
+            self.empty_shader.draw(&mut self.device, &projection, &tile_frame.special_tiles.empty, &initial_color);
+            self.error_shader.draw(&mut self.device, &projection, &tile_frame.special_tiles.error, &initial_color);
         }
-/*
-        self.empty_shader.draw(&mut self.device, &projection, &tile_frame.technique_empty.tiles);
-        self.rect_shader.draw(&mut self.device, &projection, &tile_frame.technique_rect.tiles);
-        self.rect_text_shader.draw(&mut self.device, &projection, &tile_frame.technique_rect_text.tiles);
-        self.rect_text2_shader.draw(&mut self.device, &projection, &tile_frame.technique_rect_text2.tiles);
-        self.generic_prim4_shader.draw(&mut self.device, &projection, &tile_frame.technique_generic_prim4.tiles);
-        self.generic_prim7_shader.draw(&mut self.device, &projection, &tile_frame.technique_generic_prim7.tiles);
-        self.unhandled_shader.draw(&mut self.device, &projection, &tile_frame.technique_unhandled.tiles);
 
-        gl::delete_buffers(&ubos);
-*/
+        self.gpu_profile_tiling.end();
 
         if self.enable_profiler {
             //for tile in &tile_frame.simple_tiles {
@@ -1361,8 +1453,6 @@ impl Renderer {
             //    //self.add_debug_rect(&tile.rect, format!("{}/{}", tile.info[0], tile.info[1]), &ColorF::new(0.0, 0.0, 1.0, 1.0), &ColorF::new(0.0, 0.0, 0.5, 0.5));
             //}
         }
-
-        self.gpu_profile_tiling.end();
     }
 
     fn draw_frame(&mut self, framebuffer_size: Size2D<u32>) {
@@ -1393,4 +1483,5 @@ pub struct RendererOptions {
     pub enable_msaa: bool,
     pub enable_profiler: bool,
     pub tile_size: Size2D<i32>,
+    pub allow_splitting: bool,
 }

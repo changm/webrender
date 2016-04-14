@@ -13,7 +13,8 @@ use renderer::{BLUR_INFLATION_FACTOR, TEXT_TARGET_SIZE};
 use resource_cache::ResourceCache;
 use resource_list::ResourceList;
 use std::cmp;
-use std::collections::{HashMap};
+use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::Entry::{Occupied, Vacant};
 //use std::f32;
 use std::mem;
 use std::hash::{Hash, BuildHasherDefault};
@@ -23,7 +24,7 @@ use webrender_traits::{BorderDisplayItem, BorderStyle, ItemRange, AuxiliaryLists
 
 const MAX_PRIMITIVES_PER_PASS: usize = 8;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ShaderId(pub u32);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -34,6 +35,7 @@ pub enum TileLayout {
     L4P3,
     L4P4,
     L4P6,
+    Composite,
 }
 
 #[derive(Debug)]
@@ -42,8 +44,16 @@ pub struct EmptyTile {
 }
 
 #[derive(Debug)]
-pub struct TileL4P1 {
+pub struct TileComposite {
     pub rect: Rect<i32>,
+    pub uv_rect0: Rect<f32>,
+    pub uv_rect1: Rect<f32>,
+}
+
+#[derive(Debug)]
+pub struct TileL4P1 {
+    pub target_rect: Rect<i32>,
+    pub screen_rect: Rect<i32>,
     pub layer_info: [LayerTemplateIndex; 4],
     pub prim_info: [PrimitiveKind; 4],
     pub prim: PackedPrimitive,
@@ -51,7 +61,8 @@ pub struct TileL4P1 {
 
 #[derive(Debug)]
 pub struct TileL4P2 {
-    pub rect: Rect<i32>,
+    pub target_rect: Rect<i32>,
+    pub screen_rect: Rect<i32>,
     pub layer_info: [LayerTemplateIndex; 4],
     pub prim_info: [PrimitiveKind; 4],
     pub prims: [PackedPrimitive; 2],
@@ -59,7 +70,8 @@ pub struct TileL4P2 {
 
 #[derive(Debug)]
 pub struct TileL4P3 {
-    pub rect: Rect<i32>,
+    pub target_rect: Rect<i32>,
+    pub screen_rect: Rect<i32>,
     pub layer_info: [LayerTemplateIndex; 4],
     pub prim_info: [PrimitiveKind; 4],
     pub prims: [PackedPrimitive; 3],
@@ -67,7 +79,8 @@ pub struct TileL4P3 {
 
 #[derive(Debug)]
 pub struct TileL4P4 {
-    pub rect: Rect<i32>,
+    pub target_rect: Rect<i32>,
+    pub screen_rect: Rect<i32>,
     pub layer_info: [LayerTemplateIndex; 4],
     pub prim_info: [PrimitiveKind; 4],
     pub prims: [PackedPrimitive; 4],
@@ -75,20 +88,11 @@ pub struct TileL4P4 {
 
 #[derive(Debug)]
 pub struct TileL4P6 {
-    pub rect: Rect<i32>,
-    pub layer_info: [LayerTemplateIndex; 4],
+    pub target_rect: Rect<i32>,
+    pub screen_rect: Rect<i32>,
+    pub layer_info: [LayerTemplateIndex; 8],
     pub prim_info: [PrimitiveKind; 8],
     pub prims: [PackedPrimitive; 6],
-}
-
-#[derive(Debug)]
-pub enum TileData {
-    Empty(Vec<EmptyTile>),
-    L4P1(Vec<TileL4P1>),
-    L4P2(Vec<TileL4P2>),
-    L4P3(Vec<TileL4P3>),
-    L4P4(Vec<TileL4P4>),
-    L4P6(Vec<TileL4P6>),
 }
 
 trait PrimitiveHelpers {
@@ -103,50 +107,53 @@ impl PrimitiveHelpers for Vec<Primitive> {
     }
 }
 
-impl TileData {
-    fn add_tile(&mut self,
+impl RenderBatchData {
+    fn add_pass(&mut self,
                 layout: TileLayout,
-                tile: &Tile,
+                target_rect: Rect<i32>,
+                screen_rect: Rect<i32>,
+                items: &Vec<(PrimitiveKey, LayerTemplateIndex)>,
                 primitives: &Vec<Primitive>) {
         match *self {
-            TileData::Empty(ref mut tiles) => {
+            RenderBatchData::Composite(_) => unreachable!(),
+            RenderBatchData::Empty(ref mut tiles) => {
                 assert!(layout == TileLayout::Empty);
                 tiles.push(EmptyTile {
-                    rect: tile.screen_rect,
+                    rect: screen_rect,
                 });
             }
-            TileData::L4P1(ref mut tiles) => {
+            RenderBatchData::L4P1(ref mut tiles) => {
                 assert!(layout == TileLayout::L4P1);
-                let tile_layer = &tile.layers[0];
-                let prim_key = tile_layer.primitives[0];
+                let (pk0, layer0) = items[0];
                 let tile = TileL4P1 {
-                    rect: tile.screen_rect,
+                    screen_rect: screen_rect,
+                    target_rect: target_rect,
                     layer_info: [
-                                  tile_layer.layer_index,
+                                  layer0,
                                   LayerTemplateIndex(0),
                                   LayerTemplateIndex(0),
                                   LayerTemplateIndex(0)
                                 ],
                     prim_info: [
-                                 prim_key.kind,
+                                 pk0.kind,
                                  PrimitiveKind::Invalid,
                                  PrimitiveKind::Invalid,
                                  PrimitiveKind::Invalid
                                ],
-                    prim: primitives.get(prim_key),
+                    prim: primitives.get(pk0),
                 };
                 tiles.push(tile);
             }
-            TileData::L4P2(ref mut tiles) => {
+            RenderBatchData::L4P2(ref mut tiles) => {
                 assert!(layout == TileLayout::L4P2);
-                let tile_layer = &tile.layers[0];
-                let pk0 = tile_layer.primitives[0];
-                let pk1 = tile_layer.primitives[1];
+                let (pk0, layer0) = items[0];
+                let (pk1, layer1) = items[1];
                 let tile = TileL4P2 {
-                    rect: tile.screen_rect,
+                    screen_rect: screen_rect,
+                    target_rect: target_rect,
                     layer_info: [
-                                  tile_layer.layer_index,
-                                  LayerTemplateIndex(0),
+                                  layer0,
+                                  layer1,
                                   LayerTemplateIndex(0),
                                   LayerTemplateIndex(0)
                                 ],
@@ -163,18 +170,18 @@ impl TileData {
                 };
                 tiles.push(tile);
             }
-            TileData::L4P3(ref mut tiles) => {
+            RenderBatchData::L4P3(ref mut tiles) => {
                 assert!(layout == TileLayout::L4P3);
-                let tile_layer = &tile.layers[0];
-                let pk0 = tile_layer.primitives[0];
-                let pk1 = tile_layer.primitives[1];
-                let pk2 = tile_layer.primitives[2];
+                let (pk0, layer0) = items[0];
+                let (pk1, layer1) = items[1];
+                let (pk2, layer2) = items[2];
                 let tile = TileL4P3 {
-                    rect: tile.screen_rect,
+                    screen_rect: screen_rect,
+                    target_rect: target_rect,
                     layer_info: [
-                                  tile_layer.layer_index,
-                                  LayerTemplateIndex(0),
-                                  LayerTemplateIndex(0),
+                                  layer0,
+                                  layer1,
+                                  layer2,
                                   LayerTemplateIndex(0)
                                 ],
                     prim_info: [
@@ -191,16 +198,16 @@ impl TileData {
                 };
                 tiles.push(tile);
             }
-            TileData::L4P4(ref mut tiles) => {
+            RenderBatchData::L4P4(ref mut tiles) => {
                 assert!(layout == TileLayout::L4P4);
-                let tile_layer = &tile.layers[0];
                 let mut packed_tile = TileL4P4 {
-                    rect: tile.screen_rect,
+                    screen_rect: screen_rect,
+                    target_rect: target_rect,
                     layer_info: [
-                                  tile_layer.layer_index,
                                   LayerTemplateIndex(0),
                                   LayerTemplateIndex(0),
-                                  LayerTemplateIndex(0)
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
                                 ],
                     prim_info: [
                                 PrimitiveKind::Invalid,
@@ -210,22 +217,27 @@ impl TileData {
                                ],
                     prims: unsafe { mem::uninitialized() },
                 };
-                tile.visit_primitives(4, |key, index| {
+                for (index, &(key, layer)) in items.iter().enumerate() {
                     packed_tile.prim_info[index] = key.kind;
+                    packed_tile.layer_info[index] = layer;
                     packed_tile.prims[index] = primitives.get(key);
-                });
+                };
                 tiles.push(packed_tile);
             }
-            TileData::L4P6(ref mut tiles) => {
+            RenderBatchData::L4P6(ref mut tiles) => {
                 assert!(layout == TileLayout::L4P6);
-                let tile_layer = &tile.layers[0];
                 let mut packed_tile = TileL4P6 {
-                    rect: tile.screen_rect,
+                    screen_rect: screen_rect,
+                    target_rect: target_rect,
                     layer_info: [
-                                  tile_layer.layer_index,
                                   LayerTemplateIndex(0),
                                   LayerTemplateIndex(0),
-                                  LayerTemplateIndex(0)
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
+                                  LayerTemplateIndex(0),
                                 ],
                     prim_info: [
                                 PrimitiveKind::Invalid,
@@ -239,38 +251,66 @@ impl TileData {
                                ],
                     prims: unsafe { mem::uninitialized() },
                 };
-                tile.visit_primitives(6, |key, index| {
+                for (index, &(key, layer)) in items.iter().enumerate() {
                     packed_tile.prim_info[index] = key.kind;
+                    packed_tile.layer_info[index] = layer;
                     packed_tile.prims[index] = primitives.get(key);
-                });
+                };
                 tiles.push(packed_tile);
             }
+        }
+    }
+
+    fn add_composite(&mut self,
+                     target_rect: Rect<i32>,
+                     uv_rect0: Rect<f32>,
+                     uv_rect1: Rect<f32>) {
+        match *self {
+            RenderBatchData::Composite(ref mut tiles) => {
+                tiles.push(TileComposite {
+                    rect: target_rect,
+                    uv_rect0: uv_rect0,
+                    uv_rect1: uv_rect1,
+                });
+            }
+            _ => unreachable!(),
         }
     }
 }
 
 #[derive(Debug)]
-pub struct TileBatch {
-    pub data: TileData,
-    pub shader_id: ShaderId,
+pub struct PaintTilePass {
+    pub items: Vec<(PrimitiveKey, LayerTemplateIndex)>,
 }
 
-impl TileBatch {
-    fn new(shader_id: ShaderId, tile_layout: TileLayout) -> TileBatch {
-        let data = match tile_layout {
-            TileLayout::Empty => TileData::Empty(Vec::new()),
-            TileLayout::L4P1 => TileData::L4P1(Vec::new()),
-            TileLayout::L4P2 => TileData::L4P2(Vec::new()),
-            TileLayout::L4P3 => TileData::L4P3(Vec::new()),
-            TileLayout::L4P4 => TileData::L4P4(Vec::new()),
-            TileLayout::L4P6 => TileData::L4P6(Vec::new()),
-        };
+#[derive(Debug)]
+pub struct CompositeTilePass {
+}
 
-        TileBatch {
-            shader_id: shader_id,
-            data: data,
-        }
-    }
+#[derive(Debug)]
+pub enum TilePassKind {
+    Paint(PaintTilePass),
+    Composite(CompositeTilePass),
+}
+
+#[derive(Debug)]
+pub struct TilePass {
+    pub kind: TilePassKind,
+    pub tile_layout: TileLayout,
+    pub shader_id: ShaderId,
+    pub children: Vec<TilePass>,
+    pub uv_rect: Option<Rect<f32>>,
+}
+
+#[derive(Debug)]
+pub struct PackedTile {
+    pub main_pass: TilePass,
+    pub screen_rect: Rect<i32>,
+}
+
+pub struct SpecialTiles {
+    pub empty: RenderBatchData,
+    pub error: RenderBatchData,
 }
 
 #[repr(u32)]
@@ -329,37 +369,39 @@ impl TechniqueDescriptor {
         }
     }
 
-    fn can_draw(&self, tile: &Tile) -> bool {
+    fn can_draw(&self,
+                prims_and_layers: &Vec<(PrimitiveKey, LayerTemplateIndex)>) -> bool {
+        let prim_count = prims_and_layers.len();
         let prim_count_ok = match self.primitive_count_kind {
-            TechniqueCountKind::Equal => tile.prim_count as usize == self.primitive_count,
-            TechniqueCountKind::LessEqual => tile.prim_count as usize <= self.primitive_count,
+            TechniqueCountKind::Equal => prim_count == self.primitive_count,
+            TechniqueCountKind::LessEqual => prim_count <= self.primitive_count,
             TechniqueCountKind::DontCare => true,
         };
         if !prim_count_ok {
             return false;
         }
 
+        // TODO(gw): This is really inefficient - precalculate this!
+        let mut layer_set: HashSet<LayerTemplateIndex> = HashSet::new();
+        for &(_, layer_index) in prims_and_layers {
+            layer_set.insert(layer_index);
+        }
+        let layer_count = layer_set.len();
+
         let layer_count_ok = match self.layer_count_kind {
-            TechniqueCountKind::Equal => tile.layers.len() == self.layer_count,
-            TechniqueCountKind::LessEqual => tile.layers.len() <= self.layer_count,
+            TechniqueCountKind::Equal => layer_count == self.layer_count,
+            TechniqueCountKind::LessEqual => layer_count <= self.layer_count,
             TechniqueCountKind::DontCare => true,
         };
         if !layer_count_ok {
             return false;
         }
 
-        let mut test_index = 0;
-        for layer in &tile.layers {
-            for prim_key in &layer.primitives {
-                if test_index == MAX_PRIMITIVES_PER_PASS {
-                    return true;
+        for (prim_and_layer, required_prim) in prims_and_layers.iter().zip(self.primitive_kinds.iter()) {
+            if let &Some(required_prim) = required_prim {
+                if required_prim != prim_and_layer.0.kind {
+                    return false;
                 }
-                if let Some(required_prim) = self.primitive_kinds[test_index] {
-                    if prim_key.kind != required_prim {
-                        return false;
-                    }
-                }
-                test_index += 1;
             }
         }
 
@@ -367,13 +409,128 @@ impl TechniqueDescriptor {
     }
 }
 
+#[derive(Debug)]
+pub enum RenderBatchData {
+    Empty(Vec<EmptyTile>),
+    L4P1(Vec<TileL4P1>),
+    L4P2(Vec<TileL4P2>),
+    L4P3(Vec<TileL4P3>),
+    L4P4(Vec<TileL4P4>),
+    L4P6(Vec<TileL4P6>),
+    Composite(Vec<TileComposite>),
+}
+
+#[derive(Debug)]
+pub struct RenderBatch {
+    pub data: RenderBatchData,
+}
+
+impl RenderBatch {
+    fn new(tile_layout: TileLayout) -> RenderBatch {
+        let data = match tile_layout {
+            TileLayout::Empty => RenderBatchData::Empty(Vec::new()),
+            TileLayout::L4P1 => RenderBatchData::L4P1(Vec::new()),
+            TileLayout::L4P2 => RenderBatchData::L4P2(Vec::new()),
+            TileLayout::L4P3 => RenderBatchData::L4P3(Vec::new()),
+            TileLayout::L4P4 => RenderBatchData::L4P4(Vec::new()),
+            TileLayout::L4P6 => RenderBatchData::L4P6(Vec::new()),
+            TileLayout::Composite => RenderBatchData::Composite(Vec::new()),
+        };
+
+        RenderBatch {
+            data: data,
+        }
+    }
+}
+
+pub struct RenderPass {
+    pub page_allocator: TexturePage,
+    pub batches: HashMap<ShaderId, RenderBatch>,
+}
+
+impl RenderPass {
+    fn new(size: u32) -> RenderPass {
+        RenderPass {
+            page_allocator: TexturePage::new(TextureId(0), size),
+            batches: HashMap::new(),
+        }
+    }
+}
+
 pub struct TileFrame {
     pub viewport_size: Size2D<i32>,
+    pub render_target_size: u32,
     pub text_buffer: TextBuffer,
     pub color_texture_id: TextureId,
     pub mask_texture_id: TextureId,
     pub layer_ubo: Ubo<LayerTemplateIndex, PackedLayer>,
-    pub batches: Vec<TileBatch>,
+    pub passes: Vec<RenderPass>,
+    pub special_tiles: SpecialTiles,
+}
+
+impl TileFrame {
+    fn add_pass(&mut self,
+                pass: &mut TilePass,
+                level: usize,
+                primitives: &Vec<Primitive>,
+                final_screen_rect: Rect<i32>) {
+        for child_pass in &mut pass.children {
+            self.add_pass(child_pass, level+1, primitives, final_screen_rect);
+        }
+
+        let render_pass = &mut self.passes[level];
+
+        let batch = match render_pass.batches.entry(pass.shader_id) {
+            Occupied(entry) => {
+                entry.into_mut()
+            }
+            Vacant(entry) => {
+                entry.insert(RenderBatch::new(pass.tile_layout))
+            }
+        };
+
+        let target_rect = if level == 0 {
+            final_screen_rect
+        } else {
+            let size = Size2D::new(final_screen_rect.size.width as u32,
+                                   final_screen_rect.size.height as u32);
+            let origin = render_pass.page_allocator
+                                    .allocate(&size, TextureFilter::Linear)
+                                    .expect(&format!("TODO: Alloc failure {:?} [size {}]", final_screen_rect.size, render_pass.page_allocator.size()));
+
+            let texture_size = render_pass.page_allocator.size() as f32;
+            let uv0 = Point2D::new(origin.x as f32 / texture_size, origin.y as f32 / texture_size);
+            let uv_size = Size2D::new(size.width as f32 / texture_size, size.height as f32 / texture_size);
+            pass.uv_rect = Some(Rect::new(uv0, uv_size));
+
+            Rect::new(Point2D::new(origin.x as i32, origin.y as i32),
+                      final_screen_rect.size)
+        };
+
+        match pass.kind {
+            TilePassKind::Paint(ref details) => {
+                batch.data.add_pass(pass.tile_layout,
+                                    target_rect,
+                                    final_screen_rect,
+                                    &details.items,
+                                    &primitives);
+            }
+            TilePassKind::Composite(..) => {
+                if pass.children.len() != 2 {
+                    println!("TODO: Handle composite scenarios with {} passes!", pass.children.len());
+                }
+                batch.data.add_composite(final_screen_rect,
+                                         pass.children[0].uv_rect.unwrap(),
+                                         pass.children[1].uv_rect.unwrap());
+            }
+        }
+    }
+
+    fn add_packed_tile(&mut self,
+                       packed_tile: &mut PackedTile,
+                       primitives: &Vec<Primitive>) {
+        self.add_pass(&mut packed_tile.main_pass, 0, primitives, packed_tile.screen_rect);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -401,6 +558,7 @@ pub struct TileBuilder {
     mask_texture_id: TextureId,
     scroll_offset: Point2D<f32>,
     techniques: Vec<TechniqueDescriptor>,
+    composite_shader_id: ShaderId,
     text_buffer: TextBuffer,
 }
 
@@ -752,16 +910,18 @@ impl Tile {
     }
 
     fn visit_primitives<F>(&self,
-                           max_count: usize,
-                           mut f: F) where F: FnMut(PrimitiveKey, usize) {
+                           max_count: Option<usize>,
+                           mut f: F) where F: FnMut(usize, PrimitiveKey, LayerTemplateIndex) {
         let mut prim_count = 0;
 
         for layer in &self.layers {
             for prim_key in &layer.primitives {
-                f(*prim_key, prim_count);
+                f(prim_count, *prim_key, layer.layer_index);
                 prim_count += 1;
-                if prim_count == max_count {
-                    return;
+                if let Some(max_count) = max_count {
+                    if prim_count == max_count {
+                        return;
+                    }
                 }
             }
         }
@@ -878,7 +1038,8 @@ impl Tile {
 impl TileBuilder {
     pub fn new(viewport_size: Size2D<f32>,
                scroll_offset: Point2D<f32>,
-               techniques: Vec<TechniqueDescriptor>) -> TileBuilder {
+               techniques: Vec<TechniqueDescriptor>,
+               composite_shader_id: ShaderId) -> TileBuilder {
         TileBuilder {
             layer_templates: Vec::new(),
             layer_instances: Vec::new(),
@@ -890,6 +1051,7 @@ impl TileBuilder {
             screen_rect: Rect::new(Point2D::zero(),
                                    Size2D::new(viewport_size.width as i32, viewport_size.height as i32)),
             techniques: techniques,
+            composite_shader_id: composite_shader_id,
             text_buffer: TextBuffer::new(TEXT_TARGET_SIZE),
         }
     }
@@ -1020,16 +1182,21 @@ impl TileBuilder {
 
             let run = self.text_buffer.push_text(glyphs);
 
-            self.add_primitive(PrimitiveKind::Text,
-                               xf_rect,
-                               PackedPrimitive {
-                                   p0: run.rect.origin,
-                                   p1: run.rect.bottom_right(),
-                                   st0: run.st0,
-                                   st1: run.st1,
-                                   color: *color,
-                               },
-                               false);
+            // Extra cull check based on the tighter bounding rect
+            // of the rasterized glyphs - this can often reduce the
+            // number of tiles that a text element hits significantly!
+            if let Some(xf_rect) = self.should_add_prim(&run.rect) {
+                self.add_primitive(PrimitiveKind::Text,
+                                   xf_rect,
+                                   PackedPrimitive {
+                                       p0: run.rect.origin,
+                                       p1: run.rect.bottom_right(),
+                                       st0: run.st0,
+                                       st1: run.st1,
+                                       color: *color,
+                                    },
+                                    false);
+            }
         }
     }
 
@@ -1236,41 +1403,126 @@ impl TileBuilder {
         self.layer_stack.pop();
     }
 
-    fn add_tile_to_batches(&self,
-                          tile: &Tile,
-                          batches: &mut Vec<TileBatch>) {
+    fn build_tile(&self,
+                  tile: &Tile,
+                  packed_tiles: &mut Vec<PackedTile>,
+                  special_tiles: &mut SpecialTiles,
+                  max_pass_count: &mut usize) {
         for child in &tile.children {
-            self.add_tile_to_batches(child, batches);
+            self.build_tile(child, packed_tiles, special_tiles, max_pass_count);
         }
 
         if tile.children.len() == 0 {
-            for technique in &self.techniques {
-                if technique.can_draw(tile) {
-                    //println!("technique {:?} draws {:?}", technique, tile.layers);
+            if tile.prim_count == 0 {
+                special_tiles.empty.add_pass(TileLayout::Empty,
+                                             tile.screen_rect,
+                                             tile.screen_rect,
+                                             &Vec::new(),
+                                             &self.primitives);
+            } else {
+                let mut prim_layer_list = Vec::new();
+                tile.visit_primitives(None, |_, key, layer| {
+                    prim_layer_list.push((key, layer));
+                });
 
-                    let mut batch_index = batches.iter().position(|batch| {
-                        batch.shader_id == technique.shader_id
-                    });
+                let mut passes = Vec::new();
 
-                    if batch_index.is_none() {
-                        batch_index = Some(batches.len());
-                        batches.push(TileBatch::new(technique.shader_id, technique.tile_layout));
+                let mut current_items = Vec::new();
+                let mut current_technique = None;
+
+                let mut prim_layer_iter = prim_layer_list.iter().peekable();
+
+                loop {
+                    match prim_layer_iter.peek() {
+                        Some(&&(prim_key, prim_layer)) => {
+                            current_items.push((prim_key, prim_layer));
+
+                            let mut selected_technique = None;
+                            for technique in &self.techniques {
+                                if technique.can_draw(&current_items) {
+                                    selected_technique = Some(technique);
+                                    break;
+                                }
+                            }
+
+                            match selected_technique {
+                                Some(selected_technique) => {
+                                    current_technique = Some(selected_technique);
+                                    prim_layer_iter.next();
+                                }
+                                None => {
+                                    match current_technique {
+                                        Some(technique) => {
+                                            current_items.pop().unwrap();
+                                            let pass = TilePass {
+                                                shader_id: technique.shader_id,
+                                                tile_layout: technique.tile_layout,
+                                                kind: TilePassKind::Paint(PaintTilePass {
+                                                    items: mem::replace(&mut current_items, Vec::new()),
+                                                }),
+                                                children: Vec::new(),
+                                                uv_rect: None,
+                                            };
+                                            passes.push(pass);
+                                            current_technique = None;
+                                        }
+                                        None => {
+                                            println!("ERROR: Unable to find technique - {:?}", prim_layer_list);
+                                            special_tiles.error.add_pass(TileLayout::Empty,
+                                                                         tile.screen_rect,
+                                                                         tile.screen_rect,
+                                                                         &Vec::new(),
+                                                                         &self.primitives);
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            break;
+                        }
                     }
-
-                    let batch = &mut batches[batch_index.unwrap()];
-                    batch.data.add_tile(technique.tile_layout, tile, &self.primitives);
-
-                    return;
                 }
-            }
 
-            panic!("ERROR: Can't find technique for {:?}", tile.layers);
+                let pass = TilePass {
+                    shader_id: current_technique.unwrap().shader_id,
+                    tile_layout: current_technique.unwrap().tile_layout,
+                    kind: TilePassKind::Paint(PaintTilePass {
+                        items: current_items,
+                    }),
+                    children: Vec::new(),
+                    uv_rect: None,
+                };
+                passes.push(pass);
+
+                *max_pass_count = cmp::max(*max_pass_count, passes.len());
+
+                let main_pass = if passes.len() == 1 {
+                    passes.pop().unwrap()
+                } else {
+                    TilePass {
+                        shader_id: self.composite_shader_id,
+                        tile_layout: TileLayout::Composite,
+                        kind: TilePassKind::Composite(CompositeTilePass {
+
+                        }),
+                        children: passes,
+                        uv_rect: None,
+                    }
+                };
+
+                packed_tiles.push(PackedTile {
+                    main_pass: main_pass,
+                    screen_rect: tile.screen_rect,
+                });
+            }
         }
     }
 
     // TODO(gw): This is grossly inefficient! But it should allow us to check the GPU
     //           perf on real world pages / demos, then we can worry about the CPU perf...
-    pub fn build(self) -> TileFrame {
+    pub fn build(self, allow_splitting: bool) -> TileFrame {
         let mut root_tile = Tile::new(self.screen_rect);
         let mut layer_ubo = Ubo::new();
 
@@ -1286,19 +1538,51 @@ impl TileBuilder {
             }
         }
 
-        root_tile.split_if_needed(&self.primitives);
+        if allow_splitting {
+            root_tile.split_if_needed(&self.primitives);
+        } else {
+            println!("NOTE: Tile splitting disabled!");
+        }
 
-        let mut batches = Vec::new();
-        self.add_tile_to_batches(&root_tile, &mut batches);
+        let mut packed_tiles = Vec::new();
+        let mut special_tiles = SpecialTiles {
+            empty: RenderBatchData::Empty(Vec::new()),
+            error: RenderBatchData::Empty(Vec::new()),
+        };
+        let mut max_pass_count = 0;
+        self.build_tile(&root_tile,
+                        &mut packed_tiles,
+                        &mut special_tiles,
+                        &mut max_pass_count);
 
-        TileFrame {
+        let mut render_passes = Vec::new();
+
+        // TODO(gw): This is both inefficient and incorrect... fixme!
+        let render_target_size = 2 * self.screen_rect.size.width as u32;
+
+        // todo(gw): what's the idiomatic way to do this without deriving clone?
+        for _ in 0..max_pass_count {
+            // TODO(gw): Make the render pass target size much better!
+            render_passes.push(RenderPass::new(render_target_size));
+        }
+
+        let mut frame = TileFrame {
             viewport_size: self.screen_rect.size,
+            render_target_size: render_target_size,
             color_texture_id: self.color_texture_id,
             text_buffer: self.text_buffer,
             mask_texture_id: self.mask_texture_id,
             layer_ubo: layer_ubo,
-            batches: batches,
+            passes: render_passes,
+            special_tiles: special_tiles,
+        };
+
+        for packed_tile in &mut packed_tiles {
+            frame.add_packed_tile(packed_tile,
+                                  &self.primitives);
         }
+
+        frame
     }
 }
 

@@ -410,10 +410,9 @@ pub struct Frame {
 
     viewport_size: Size2D<i32>,
     tile_builder: Option<TileBuilder>,
-    //tile_size: Size2D<i32>,
-    //max_ubo_size: usize,
     scroll_offset: Point2D<i32>,
     techniques: Vec<TechniqueDescriptor>,
+    composite_shader_id: ShaderId,
 }
 
 enum SceneItemKind<'a> {
@@ -543,7 +542,8 @@ impl StackingContextHelpers for StackingContext {
 impl Frame {
     pub fn new(_max_ubo_size: usize,
                _tile_size: Size2D<i32>,
-               techniques: Vec<TechniqueDescriptor>) -> Frame {
+               techniques: Vec<TechniqueDescriptor>,
+               composite_shader_id: ShaderId) -> Frame {
         Frame {
             pipeline_epoch_map: HashMap::with_hasher(Default::default()),
             pipeline_auxiliary_lists: HashMap::with_hasher(Default::default()),
@@ -556,6 +556,7 @@ impl Frame {
             //max_ubo_size: max_ubo_size,
             scroll_offset: Point2D::zero(),
             techniques: techniques,
+            composite_shader_id: composite_shader_id,
         }
     }
 
@@ -783,7 +784,8 @@ impl Frame {
                     let mut tile_builder = TileBuilder::new(root_pipeline.viewport_size,
                                                             Point2D::new(self.scroll_offset.x as f32,
                                                                          self.scroll_offset.y as f32),
-                                                            self.techniques.clone());
+                                                            self.techniques.clone(),
+                                                            self.composite_shader_id);
                     tile_builder.push_layer(root_stacking_context.stacking_context.bounds,
                                             Matrix4::identity(),
                                             1.0);
@@ -1229,7 +1231,8 @@ impl Frame {
     pub fn build(&mut self,
                  resource_cache: &mut ResourceCache,
                  _thread_pool: &mut scoped_threadpool::Pool,
-                 _device_pixel_ratio: f32)
+                 _device_pixel_ratio: f32,
+                 allow_splitting: bool)
                  -> RendererFrame {
         // Traverse layer trees to calculate visible nodes
         /*
@@ -1260,7 +1263,7 @@ impl Frame {
 
         resource_cache.expire_old_resources(self.id);
 
-        let frame = self.build_frame();
+        let frame = self.build_frame(allow_splitting);
 
         frame
     }
@@ -1416,9 +1419,9 @@ impl Frame {
         RendererFrame::new(self.pipeline_epoch_map.clone(), layers_bouncing_back, root_layer)
     }*/
 
-    fn build_frame(&mut self) -> RendererFrame {
+    fn build_frame(&mut self, allow_splitting: bool) -> RendererFrame {
         let tile_builder = self.tile_builder.take();
-        let tile_frame = tile_builder.map(|builder| builder.build());
+        let tile_frame = tile_builder.map(|builder| builder.build(allow_splitting));
 
         let layers_bouncing_back = self.collect_layers_bouncing_back();
         RendererFrame::new(self.pipeline_epoch_map.clone(),

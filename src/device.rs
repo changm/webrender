@@ -836,6 +836,7 @@ pub struct Device {
     // device state
     bound_color_texture: TextureId,
     bound_mask_texture: TextureId,
+    bound_tiling_texture: TextureId,
     bound_program: ProgramId,
     bound_vao: VAOId,
     bound_fbo: FBOId,
@@ -881,6 +882,7 @@ impl Device {
 
             bound_color_texture: TextureId(0),
             bound_mask_texture: TextureId(0),
+            bound_tiling_texture: TextureId(0),
             bound_program: ProgramId(0),
             bound_vao: VAOId(0),
             bound_fbo: FBOId(0),
@@ -947,6 +949,10 @@ impl Device {
         gl::active_texture(gl::TEXTURE1);
         gl::bind_texture(gl::TEXTURE_2D, 0);
 
+        self.bound_tiling_texture = TextureId(0);
+        gl::active_texture(gl::TEXTURE2);
+        gl::bind_texture(gl::TEXTURE_2D, 0);
+
         // Shader state
         self.bound_program = ProgramId(0);
         gl::use_program(0);
@@ -980,6 +986,17 @@ impl Device {
         if self.bound_mask_texture != texture_id {
             self.bound_mask_texture = texture_id;
             gl::active_texture(gl::TEXTURE1);
+            texture_id.bind();
+            gl::active_texture(gl::TEXTURE0);
+        }
+    }
+
+    pub fn bind_tiling_texture(&mut self, texture_id: TextureId) {
+        debug_assert!(self.inside_frame);
+
+        if self.bound_tiling_texture != texture_id {
+            self.bound_tiling_texture = texture_id;
+            gl::active_texture(gl::TEXTURE2);
             texture_id.bind();
             gl::active_texture(gl::TEXTURE0);
         }
@@ -1378,6 +1395,10 @@ impl Device {
                 if u_mask != -1 {
                     gl::uniform_1i(u_mask, TextureSampler::Mask as i32);
                 }
+                let u_tiling = gl::get_uniform_location(program.id, "sTiling");
+                if u_tiling != -1 {
+                    gl::uniform_1i(u_tiling, TextureSampler::Tiling as i32);
+                }
                 let u_diffuse2d = gl::get_uniform_location(program.id, "sDiffuse2D");
                 if u_diffuse2d != -1 {
                     gl::uniform_1i(u_diffuse2d, TextureSampler::Color as i32);
@@ -1440,6 +1461,12 @@ impl Device {
         debug_assert!(self.inside_frame);
         let UniformLocation(location) = uniform;
         gl::uniform_2f(location, x, y);
+    }
+
+    pub fn set_uniform_4f(&self, uniform: UniformLocation, x: f32, y: f32, z: f32, w: f32) {
+        debug_assert!(self.inside_frame);
+        let UniformLocation(location) = uniform;
+        gl::uniform_4f(location, x, y, z, w);
     }
 
     fn set_uniforms(&self, program: &Program, transform: &Matrix4) {
