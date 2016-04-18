@@ -67,11 +67,11 @@ impl MatrixHelpers for Matrix4 {
 }
 
 pub trait RectHelpers {
-    fn contains_rect(&self, other: &Rect<f32>) -> bool;
+    fn contains_rect(&self, other: &Rect<i32>) -> bool;
 }
 
-impl RectHelpers for Rect<f32> {
-    fn contains_rect(&self, other: &Rect<f32>) -> bool {
+impl RectHelpers for Rect<i32> {
+    fn contains_rect(&self, other: &Rect<i32>) -> bool {
         self.origin.x <= other.origin.x &&
         self.origin.y <= other.origin.y &&
         self.max_x() >= other.max_x() &&

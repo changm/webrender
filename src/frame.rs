@@ -409,10 +409,8 @@ pub struct Frame {
     id: FrameId,
 
     viewport_size: Size2D<i32>,
-    tile_builder: Option<TileBuilder>,
+    frame_builder: Option<FrameBuilder>,
     scroll_offset: Point2D<i32>,
-    techniques: Vec<TechniqueDescriptor>,
-    composite_shader_id: ShaderId,
 }
 
 enum SceneItemKind<'a> {
@@ -540,10 +538,7 @@ impl StackingContextHelpers for StackingContext {
 }
 
 impl Frame {
-    pub fn new(_max_ubo_size: usize,
-               _tile_size: Size2D<i32>,
-               techniques: Vec<TechniqueDescriptor>,
-               composite_shader_id: ShaderId) -> Frame {
+    pub fn new(config: FrameBuilderConfig) -> Frame {
         Frame {
             pipeline_epoch_map: HashMap::with_hasher(Default::default()),
             pipeline_auxiliary_lists: HashMap::with_hasher(Default::default()),
@@ -551,12 +546,8 @@ impl Frame {
             id: FrameId(0),
 
             viewport_size: Size2D::zero(),
-            tile_builder: None,
-            //tile_size: tile_size,
-            //max_ubo_size: max_ubo_size,
+            frame_builder: None,
             scroll_offset: Point2D::zero(),
-            techniques: techniques,
-            composite_shader_id: composite_shader_id,
         }
     }
 
@@ -781,29 +772,22 @@ impl Frame {
                         pipeline_id: root_pipeline_id,
                     };
 
-                    let mut tile_builder = TileBuilder::new(root_pipeline.viewport_size,
-                                                            Point2D::new(self.scroll_offset.x as f32,
-                                                                         self.scroll_offset.y as f32),
-                                                            self.techniques.clone(),
-                                                            self.composite_shader_id);
-                    tile_builder.push_layer(root_stacking_context.stacking_context.bounds,
-                                            Matrix4::identity(),
-                                            1.0);
+                    let mut frame_builder = FrameBuilder::new(root_pipeline.viewport_size,
+                                                              Point2D::new(self.scroll_offset.x as f32,
+                                                                           self.scroll_offset.y as f32));
+
+                    frame_builder.push_layer(root_stacking_context.stacking_context.bounds,
+                                             Matrix4::identity(),
+                                             1.0);
 
                     let root_pipeline = SceneItemKind::Pipeline(root_pipeline);
                     self.flatten(root_pipeline,
                                  &parent_info,
                                  &mut context,
-                                 &mut tile_builder,
+                                 &mut frame_builder,
                                  0);
-                    tile_builder.pop_layer();
-                    self.tile_builder = Some(tile_builder);
-                    //self.root = Some(root_target);
-
-                    //if let Some(last_draw_list_group) = context.current_draw_list_group.take() {
-                    //    self.draw_list_groups.insert(last_draw_list_group.id,
-                    //                                 last_draw_list_group);
-                    //}
+                    frame_builder.pop_layer();
+                    self.frame_builder = Some(frame_builder);
                 }
 
                 // TODO(gw): These are all independent - can be run through thread pool if it shows up in the profile!
@@ -823,7 +807,7 @@ impl Frame {
     fn add_items_to_layer(&mut self,
                           scene_items: &[SceneItem],
                           info: &FlattenInfo,
-                          builder: &mut TileBuilder,
+                          builder: &mut FrameBuilder,
                           context: &mut FlattenContext,
                           _level: i32) {
 
@@ -1098,7 +1082,7 @@ impl Frame {
                scene_item: SceneItemKind,
                parent_info: &FlattenInfo,
                context: &mut FlattenContext,
-               builder: &mut TileBuilder,
+               builder: &mut FrameBuilder,
                level: i32) {
         let _pf = util::ProfileScope::new("  flatten");
 
@@ -1231,8 +1215,7 @@ impl Frame {
     pub fn build(&mut self,
                  resource_cache: &mut ResourceCache,
                  _thread_pool: &mut scoped_threadpool::Pool,
-                 _device_pixel_ratio: f32,
-                 allow_splitting: bool)
+                 _device_pixel_ratio: f32)
                  -> RendererFrame {
         // Traverse layer trees to calculate visible nodes
         /*
@@ -1263,7 +1246,7 @@ impl Frame {
 
         resource_cache.expire_old_resources(self.id);
 
-        let frame = self.build_frame(allow_splitting);
+        let frame = self.build_frame();
 
         frame
     }
@@ -1419,14 +1402,14 @@ impl Frame {
         RendererFrame::new(self.pipeline_epoch_map.clone(), layers_bouncing_back, root_layer)
     }*/
 
-    fn build_frame(&mut self, allow_splitting: bool) -> RendererFrame {
-        let tile_builder = self.tile_builder.take();
-        let tile_frame = tile_builder.map(|builder| builder.build(allow_splitting));
+    fn build_frame(&mut self) -> RendererFrame {
+        let frame_builder = self.frame_builder.take();
+        let frame = frame_builder.map(|builder| builder.build());
 
         let layers_bouncing_back = self.collect_layers_bouncing_back();
         RendererFrame::new(self.pipeline_epoch_map.clone(),
                            layers_bouncing_back,
-                           tile_frame)
+                           frame)
     }
 
     fn collect_layers_bouncing_back(&self)

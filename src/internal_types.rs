@@ -16,7 +16,7 @@ use std::ops::{Add, Sub};
 use std::path::PathBuf;
 use std::sync::Arc;
 use texture_cache::BorderType;
-use tiling::TileFrame;
+use tiling;
 use webrender_traits::{FontKey, Epoch, ColorF, PipelineId};
 use webrender_traits::{ImageFormat, MixBlendMode, NativeFontHandle, DisplayItem, ScrollLayerId};
 
@@ -372,18 +372,18 @@ pub struct ChildLayerIndex(pub u32);
 pub struct RendererFrame {
     pub pipeline_epoch_map: HashMap<PipelineId, Epoch, BuildHasherDefault<FnvHasher>>,
     pub layers_bouncing_back: HashSet<ScrollLayerId, BuildHasherDefault<FnvHasher>>,
-    pub tile_frame: Option<TileFrame>,
+    pub frame: Option<tiling::Frame>,
 }
 
 impl RendererFrame {
     pub fn new(pipeline_epoch_map: HashMap<PipelineId, Epoch, BuildHasherDefault<FnvHasher>>,
                layers_bouncing_back: HashSet<ScrollLayerId, BuildHasherDefault<FnvHasher>>,
-               tile_frame: Option<TileFrame>)
+               frame: Option<tiling::Frame>)
                -> RendererFrame {
         RendererFrame {
             pipeline_epoch_map: pipeline_epoch_map,
             layers_bouncing_back: layers_bouncing_back,
-            tile_frame: tile_frame,
+            frame: frame,
         }
     }
 }
