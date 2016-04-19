@@ -16,10 +16,10 @@ use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
 use std::mem;
 use util::{self, MatrixHelpers};
-use tiling::{Clip, TileBuilder};
+use tiling::{Clip, FrameBuilder, FrameBuilderConfig};
 use webrender_traits::{AuxiliaryLists, PipelineId, Epoch, ScrollPolicy, ScrollLayerId};
 use webrender_traits::{StackingContext, FilterOp, ImageFormat, MixBlendMode};
-use webrender_traits::{ScrollEventPhase, ScrollLayerInfo};
+use webrender_traits::{ScrollEventPhase, ScrollLayerInfo, SpecificDisplayItem};
 
 /*
 #[cfg(target_os = "macos")]
