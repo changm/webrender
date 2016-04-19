@@ -23,8 +23,9 @@ use webrender_traits::{ColorF, FontKey, GlyphInstance, ImageKey, ImageRendering,
 use webrender_traits::{BorderDisplayItem, BorderStyle, ItemRange, AuxiliaryLists, BorderRadius};
 use webrender_traits::{GradientStop};
 
-const MAX_PRIMITIVES_PER_PASS: usize = 8;
+const MAX_PRIMITIVES_PER_PASS: usize = 4;
 const INVALID_PRIM_INDEX: u32 = 0xffffffff;
+const INVALID_CLIP_INDEX: u32 = 0xffffffff;
 
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -101,11 +102,11 @@ impl TextBuffer {
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum PrimitiveShader {
     OpaqueRectangle,
+    OpaqueRectangleClip,
     OpaqueImage,
     OpaqueRectangleText,
     Generic2,
     Generic4,
-    Generic5,
     Error,
 }
 
@@ -168,6 +169,9 @@ pub enum PrimitiveKind {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct PrimitiveIndex(u32);
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct ClipIndex(u32);
+
 #[derive(Debug, Copy, Clone)]
 pub struct PrimitiveKey {
     kind: PrimitiveKind,
@@ -218,6 +222,7 @@ struct Primitive {
     packed: PackedPrimitive,
     intersecting_prims_behind: Vec<PrimitiveIndex>,
     intersecting_prims_in_front: Vec<PrimitiveIndex>,
+    clip: Option<Clip>,
 }
 
 // TODO (gw): Profile and create a smaller layout for simple passes if worthwhile...
@@ -225,6 +230,7 @@ struct Primitive {
 pub struct PackedDrawCommand {
     pub prim_indices: [u32; MAX_PRIMITIVES_PER_PASS],
     pub layer_indices: [u32; MAX_PRIMITIVES_PER_PASS],
+    pub clip_info: [u32; 4],
 }
 
 impl PackedDrawCommand {
@@ -239,6 +245,7 @@ impl PackedDrawCommand {
         PackedDrawCommand {
             prim_indices: [INVALID_PRIM_INDEX; MAX_PRIMITIVES_PER_PASS],
             layer_indices: [0; MAX_PRIMITIVES_PER_PASS],
+            clip_info: [INVALID_CLIP_INDEX; 4],
         }
     }
 }
@@ -246,6 +253,7 @@ impl PackedDrawCommand {
 #[derive(Debug)]
 struct RenderPrimitive {
     layer_index_in_ubo: u32,
+    clip_index_in_ubo: Option<u32>,
     key: PrimitiveKey,
     shader: PrimitiveShader,
     other_primitives: Vec<(PrimitiveIndex, LayerTemplateIndex)>,
@@ -314,17 +322,20 @@ pub struct Batch {
     pub shader: PrimitiveShader,
     pub layer_ubo_index: usize,
     pub prim_ubo_index: usize,
+    pub clip_ubo_index: usize,
     pub commands: Vec<PackedDrawCommand>,
 }
 
 impl Batch {
     fn new(shader: PrimitiveShader,
            layer_ubo_index: usize,
-           prim_ubo_index: usize) -> Batch {
+           prim_ubo_index: usize,
+           clip_ubo_index: usize) -> Batch {
         Batch {
             shader: shader,
             commands: Vec::new(),
             prim_ubo_index: prim_ubo_index,
+            clip_ubo_index: clip_ubo_index,
             layer_ubo_index: layer_ubo_index,
         }
     }
@@ -338,6 +349,7 @@ pub struct Pass {
 pub struct Frame {
     pub layer_ubos: Vec<Ubo<LayerTemplateIndex, PackedLayer>>,
     pub primitive_ubos: Vec<Ubo<PrimitiveIndex, PackedPrimitive>>,
+    pub clip_ubos: Vec<Ubo<ClipIndex, Clip>>,
     pub passes: Vec<Pass>,
     pub color_texture_id: TextureId,
     pub mask_texture_id: TextureId,
@@ -551,6 +563,7 @@ impl FrameBuilder {
                                        rect_kind: RectangleKind::Solid,
                                        padding: [0, 0],
                                     },
+                                    None,
                                     false);
             }
         }
@@ -588,13 +601,15 @@ impl FrameBuilder {
                                    rect_kind: RectangleKind::Solid,
                                    padding: [0, 0],
                                },
+                               None,
                                image_info.is_opaque);
         }
     }
 
     pub fn add_solid_rectangle(&mut self,
                                rect: Rect<f32>,
-                               color: ColorF) {
+                               color: ColorF,
+                               clip: Option<Clip>) {
         if color.a == 0.0 {
             return;
         }
@@ -613,6 +628,7 @@ impl FrameBuilder {
                                    rect_kind: RectangleKind::Solid,
                                    padding: [0, 0],
                                },
+                               clip,
                                color.a == 1.0);
         }
     }
@@ -640,6 +656,7 @@ impl FrameBuilder {
                                    rect_kind: rect_kind,
                                    padding: [0, 0],
                                },
+                               None,
                                color0.a == 1.0 && color1.a == 1.0);
         }
     }
@@ -686,19 +703,23 @@ impl FrameBuilder {
         // Edges
         self.add_solid_rectangle(Rect::new(Point2D::new(tl_outer.x, tl_inner.y),
                                            Size2D::new(left.width, bl_inner.y - tl_inner.y)),
-                                 left_color);
+                                 left_color,
+                                 None);
 
         self.add_solid_rectangle(Rect::new(Point2D::new(tl_inner.x, tl_outer.y),
                                            Size2D::new(tr_inner.x - tl_inner.x, tr_outer.y + top.width - tl_outer.y)),
-                                 top_color);
+                                 top_color,
+                                 None);
 
         self.add_solid_rectangle(Rect::new(Point2D::new(br_outer.x - right.width, tr_inner.y),
                                            Size2D::new(right.width, br_inner.y - tr_inner.y)),
-                                 right_color);
+                                 right_color,
+                                 None);
 
         self.add_solid_rectangle(Rect::new(Point2D::new(bl_inner.x, bl_outer.y - bottom.width),
                                            Size2D::new(br_inner.x - bl_inner.x, br_outer.y - bl_outer.y + bottom.width)),
-                           bottom_color);
+                           bottom_color,
+                                 None);
 
         // Corners
         let need_clip = radius.top_left != Size2D::zero() ||
@@ -731,22 +752,26 @@ impl FrameBuilder {
         self.add_solid_rectangle(Rect::new(tl_outer,
                                            Size2D::new(tl_inner.x - tl_outer.x,
                                                        tl_inner.y - tl_outer.y)),
-                           left_color);
+                           left_color,
+                           None);
 
         self.add_solid_rectangle(Rect::new(Point2D::new(tr_inner.x, tr_outer.y),
                                            Size2D::new(tr_outer.x - tr_inner.x,
                                                        tr_inner.y - tr_outer.y)),
-                           top_color);
+                           top_color,
+                           None);
 
         self.add_solid_rectangle(Rect::new(br_inner,
                                            Size2D::new(br_outer.x - br_inner.x,
                                                        br_outer.y - br_inner.y)),
-                           right_color);
+                           right_color,
+                           None);
 
         self.add_solid_rectangle(Rect::new(Point2D::new(bl_outer.x, bl_inner.y),
                                            Size2D::new(bl_inner.x - bl_outer.x,
                                                        bl_outer.y - bl_inner.y)),
-                           bottom_color);
+                           bottom_color,
+                           None);
 
         if need_clip {
             //self.clear_clip();
@@ -834,7 +859,8 @@ impl FrameBuilder {
 
     fn build_primitive(&self,
                        key: PrimitiveKey,
-                       layer_index_in_ubo: u32) -> Option<RenderPrimitive> {
+                       layer_index_in_ubo: u32,
+                       clip_index_in_ubo: Option<u32>) -> Option<RenderPrimitive> {
         let prim = self.get_prim(key.index);
 
         // If this primitive is occluded, there is no
@@ -849,10 +875,16 @@ impl FrameBuilder {
         if prim.is_opaque || prim.intersecting_prims_behind.is_empty() {
             match key.kind {
                 PrimitiveKind::Rectangle => {
+                    let shader = if prim.clip.is_some() {
+                        PrimitiveShader::OpaqueRectangleClip
+                    } else {
+                        PrimitiveShader::OpaqueRectangle
+                    };
                     Some(RenderPrimitive {
-                        shader: PrimitiveShader::OpaqueRectangle,
+                        shader: shader,
                         key: key,
                         layer_index_in_ubo: layer_index_in_ubo,
+                        clip_index_in_ubo: clip_index_in_ubo,
                         other_primitives: Vec::new(),
                     })
                 }
@@ -861,12 +893,18 @@ impl FrameBuilder {
                         shader: PrimitiveShader::OpaqueImage,
                         key: key,
                         layer_index_in_ubo: layer_index_in_ubo,
+                        clip_index_in_ubo: clip_index_in_ubo,
                         other_primitives: Vec::new(),
                     })
                 }
                 _ => {
-                    println!("TODO: Opaque non-rect/image!");
-                    None
+                    Some(RenderPrimitive {
+                        shader: PrimitiveShader::Generic2,
+                        key: key,
+                        layer_index_in_ubo: layer_index_in_ubo,
+                        clip_index_in_ubo: None,
+                        other_primitives: Vec::new(),
+                    })
                 }
             }
         } else if prim.intersecting_prims_behind.len() == 1 {
@@ -878,6 +916,7 @@ impl FrameBuilder {
                         shader: PrimitiveShader::OpaqueRectangleText,
                         key: key,
                         layer_index_in_ubo: layer_index_in_ubo,
+                        clip_index_in_ubo: clip_index_in_ubo,
                         other_primitives: vec![(back_prim_index, back_prim.layer)],
                     })
                 }
@@ -886,11 +925,12 @@ impl FrameBuilder {
                         shader: PrimitiveShader::Generic2,
                         key: key,
                         layer_index_in_ubo: layer_index_in_ubo,
+                        clip_index_in_ubo: None,
                         other_primitives: vec![(back_prim_index, back_prim.layer)],
                     })
                 }
             }
-        } else if prim.intersecting_prims_behind.len() < 5 {
+        } else if prim.intersecting_prims_behind.len() < 4 {
             let mut others = Vec::new();
             for other_prim_index in &prim.intersecting_prims_behind {
                 let other_prim_index = *other_prim_index;
@@ -901,19 +941,7 @@ impl FrameBuilder {
                 shader: PrimitiveShader::Generic4,
                 key: key,
                 layer_index_in_ubo: layer_index_in_ubo,
-                other_primitives: others,
-            })
-        } else if prim.intersecting_prims_behind.len() < 6 {
-            let mut others = Vec::new();
-            for other_prim_index in &prim.intersecting_prims_behind {
-                let other_prim_index = *other_prim_index;
-                let other_prim = self.get_prim(other_prim_index);
-                others.push((other_prim_index, other_prim.layer));
-            }
-            Some(RenderPrimitive {
-                shader: PrimitiveShader::Generic5,
-                key: key,
-                layer_index_in_ubo: layer_index_in_ubo,
+                clip_index_in_ubo: clip_index_in_ubo,
                 other_primitives: others,
             })
         } else {
@@ -930,7 +958,7 @@ impl FrameBuilder {
             // Don't need to be opaque due to batch ordering...
             if //prim_in_front.is_opaque &&
                prim_in_front.xf_rect.screen_rect.contains_rect(&prim.xf_rect.screen_rect) {
-                println!("prim {:?} is OCCLUDED by {:?}", prim.xf_rect.screen_rect, prim_in_front.xf_rect.screen_rect);
+                //println!("prim {:?} is OCCLUDED by {:?}", prim.xf_rect.screen_rect, prim_in_front.xf_rect.screen_rect);
                 return true;
             }
         }
@@ -944,6 +972,7 @@ impl FrameBuilder {
         self.assign_primitive_ordering(&collision_pairs);
 
         let mut layer_ubo = Ubo::new();
+        let mut clip_ubo = Ubo::new();
         let mut render_prims = Vec::new();
 
         for layer_instance in &self.layer_instances {
@@ -953,13 +982,24 @@ impl FrameBuilder {
                                                                           layer_template);
 
             for primitive_key in &layer_instance.primitives {
-                let render_prim = self.build_primitive(*primitive_key,
-                                                       layer_index_in_ubo)
+                let primitive_key = *primitive_key;
+                let prim = self.get_prim(primitive_key.index);
+
+                let clip_index_in_ubo = prim.clip.as_ref().map(|clip| {
+                    // hack hack hack to ensure it always gets added - refcount these?
+                    let clip_index = ClipIndex(clip_ubo.items.len() as u32);
+                    clip_ubo.maybe_insert_and_get_index(clip_index, clip)
+                });
+
+                let render_prim = self.build_primitive(primitive_key,
+                                                       layer_index_in_ubo,
+                                                       clip_index_in_ubo)
                                       .unwrap_or_else(|| {
                                         RenderPrimitive {
                                             shader: PrimitiveShader::Error,
-                                            key: *primitive_key,
+                                            key: primitive_key,
                                             layer_index_in_ubo: layer_index_in_ubo,
+                                            clip_index_in_ubo: clip_index_in_ubo,
                                             other_primitives: Vec::new(),
                                         }
                                       });
@@ -979,6 +1019,7 @@ impl FrameBuilder {
             let main_prim_index_in_ubo = prim_ubo.maybe_insert_and_get_index(render_prim.key.index,
                                                                              &main_prim.packed);
             draw_cmd.set_primitive(0, main_prim_index_in_ubo, render_prim.layer_index_in_ubo);
+            draw_cmd.clip_info[0] = render_prim.clip_index_in_ubo.unwrap_or(INVALID_CLIP_INDEX);
 
             for (other_prim_index, other_prim_info) in render_prim.other_primitives.iter().enumerate() {
                 let other_prim = self.get_prim(other_prim_info.0);
@@ -1004,7 +1045,7 @@ impl FrameBuilder {
             };
 
             if need_new_batch {
-                let batch = Batch::new(render_prim.shader, 0, 0);
+                let batch = Batch::new(render_prim.shader, 0, 0, 0);
                 batches.push(batch);
             }
 
@@ -1012,12 +1053,9 @@ impl FrameBuilder {
             batch.commands.push(draw_cmd);
         }
 
-        //println!("{:?}", layer_ubo.items);
-        //println!("{:?}", prim_ubo.items);
-        //println!("{:?}", opaque_rect_batch);
-
         let layer_ubos = vec![layer_ubo];
         let primitive_ubos = vec![prim_ubo];
+        let clip_ubos = vec![clip_ubo];
         let passes = vec![Pass {
             viewport_size: Size2D::new(self.screen_rect.size.width as u32,
                                        self.screen_rect.size.height as u32),
@@ -1027,6 +1065,7 @@ impl FrameBuilder {
         Frame {
             layer_ubos: layer_ubos,
             primitive_ubos: primitive_ubos,
+            clip_ubos: clip_ubos,
             passes: passes,
             color_texture_id: self.color_texture_id,
             mask_texture_id: self.mask_texture_id,
@@ -1051,6 +1090,7 @@ impl FrameBuilder {
                      kind: PrimitiveKind,
                      xf_rect: TransformedRect,
                      packed: PackedPrimitive,
+                     clip: Option<Clip>,
                      is_opaque: bool) {
         let current_layer = *self.layer_stack.last().unwrap();
 
@@ -1071,20 +1111,20 @@ impl FrameBuilder {
             packed: packed,
             intersecting_prims_behind: Vec::new(),
             intersecting_prims_in_front: Vec::new(),
+            clip: clip,
         });
         self.layer_instances.last_mut().unwrap().primitives.push(prim_key);
     }
 }
 
-/*
 #[derive(Debug, Clone)]
 pub struct ClipCorner {
     position: Point2D<f32>,
+    padding: Point2D<f32>,
     outer_radius_x: f32,
     outer_radius_y: f32,
     inner_radius_x: f32,
     inner_radius_y: f32,
-    padding: Point2D<f32>,
 }
 
 impl ClipCorner {
@@ -1110,7 +1150,6 @@ pub struct Clip {
 }
 
 impl Clip {
-    /*
     pub fn invalid() -> Clip {
         Clip {
             rect: Rect::zero(),
@@ -1120,7 +1159,6 @@ impl Clip {
             bottom_right: ClipCorner::invalid(),
         }
     }
-*/
 
     pub fn from_clip_region(clip: &ComplexClipRegion) -> Clip {
         Clip {
@@ -1208,37 +1246,3 @@ impl Clip {
         }
     }
 }
-
-
-/*
-
-#[derive(Clone, Debug)]
-pub struct PackedGradientStop {
-    color: ColorF,
-    offset: [f32; 4],
-}
-
-pub struct GradientStopPrimitive {
-    stops: Vec<PackedGradientStop>,
-}
-
-#[derive(Clone, Debug)]
-pub struct PackedGradient {
-    p0: Point2D<f32>,
-    p1: Point2D<f32>,
-    constants: [f32; 4],
-    stop_start_index: u32,
-    stop_count: u32,
-    pad0: u32,
-    pad1: u32,
-}
-
-pub struct GradientPrimitive {
-    rect: Rect<f32>,
-    stops_index: GradientStopPrimitiveIndex,
-    packed: PackedGradient,
-}
-
-*/
-
-*/
