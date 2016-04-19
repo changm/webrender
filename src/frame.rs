@@ -930,8 +930,7 @@ impl Frame {
                                 };
 */
 
-                                builder.add_rectangle(item.rect,
-                                                      info.color);
+                                builder.add_solid_rectangle(item.rect, info.color);
 
 /*
                                 if !clips.is_empty() {

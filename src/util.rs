@@ -84,3 +84,7 @@ impl RectHelpers for Rect<i32> {
 pub fn rect_is_empty<N:PartialEq + Zero>(rect: &Rect<N>) -> bool {
     rect.size.width == Zero::zero() || rect.size.height == Zero::zero()
 }
+
+pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    (b - a) * t + a
+}

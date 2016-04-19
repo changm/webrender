@@ -8,23 +8,31 @@ use device::{TextureId, TextureFilter};
 use euclid::{Point2D, Rect, Matrix4, Size2D, Point4D};
 use fnv::FnvHasher;
 use frame::FrameId;
-use internal_types::{Glyph, GlyphKey};
+use internal_types::{AxisDirection, Glyph, GlyphKey};
 use renderer::{BLUR_INFLATION_FACTOR, TEXT_TARGET_SIZE};
 use resource_cache::ResourceCache;
 use resource_list::ResourceList;
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
-//use std::f32;
 use std::mem;
 use std::hash::{Hash, BuildHasherDefault};
 use texture_cache::TexturePage;
-use util::RectHelpers;
+use util::{self, RectHelpers};
 use webrender_traits::{ColorF, FontKey, GlyphInstance, ImageKey, ImageRendering, ComplexClipRegion};
 use webrender_traits::{BorderDisplayItem, BorderStyle, ItemRange, AuxiliaryLists, BorderRadius};
+use webrender_traits::{GradientStop};
 
 const MAX_PRIMITIVES_PER_PASS: usize = 8;
 const INVALID_PRIM_INDEX: u32 = 0xffffffff;
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum RectangleKind {
+    Solid,
+    HorizontalGradient,
+    VerticalGradient,
+}
 
 #[derive(Clone, Debug)]
 pub struct PackedGlyph {
@@ -97,7 +105,7 @@ pub enum PrimitiveShader {
     OpaqueRectangleText,
     Generic2,
     Generic4,
-    Generic6,
+    Generic5,
     Error,
 }
 
@@ -195,9 +203,11 @@ pub struct PackedPrimitive {
     pub p1: Point2D<f32>,
     pub st0: Point2D<f32>,
     pub st1: Point2D<f32>,
-    pub color: ColorF,
+    pub color0: ColorF,
+    pub color1: ColorF,
     pub kind: PrimitiveKind,
-    pub padding: [u32; 3],
+    pub rect_kind: RectangleKind,
+    pub padding: [u32; 2],
 }
 
 #[derive(Debug)]
@@ -402,13 +412,65 @@ impl FrameBuilder {
         self.layer_stack.pop();
     }
 
+    fn add_axis_aligned_gradient_with_stops(&mut self,
+                                            rect: &Rect<f32>,
+                                            direction: AxisDirection,
+                                            stops: &[GradientStop]) {
+        for i in 0..(stops.len() - 1) {
+            let (prev_stop, next_stop) = (&stops[i], &stops[i + 1]);
+            let piece_rect;
+            let rect_kind;
+            match direction {
+                AxisDirection::Horizontal => {
+                    let prev_x = util::lerp(rect.origin.x, rect.max_x(), prev_stop.offset);
+                    let next_x = util::lerp(rect.origin.x, rect.max_x(), next_stop.offset);
+                    piece_rect = Rect::new(Point2D::new(prev_x, rect.origin.y),
+                                           Size2D::new(next_x - prev_x, rect.size.height));
+                    rect_kind = RectangleKind::HorizontalGradient;
+                }
+                AxisDirection::Vertical => {
+                    let prev_y = util::lerp(rect.origin.y, rect.max_y(), prev_stop.offset);
+                    let next_y = util::lerp(rect.origin.y, rect.max_y(), next_stop.offset);
+                    piece_rect = Rect::new(Point2D::new(rect.origin.x, prev_y),
+                                           Size2D::new(rect.size.width, next_y - prev_y));
+                    rect_kind = RectangleKind::VerticalGradient;
+                }
+            }
+
+            self.add_complex_rectangle(piece_rect,
+                                       prev_stop.color,
+                                       next_stop.color,
+                                       rect_kind);
+        }
+    }
+
     pub fn add_gradient(&mut self,
-                        _rect: Rect<f32>,
-                        _start_point: &Point2D<f32>,
-                        _end_point: &Point2D<f32>,
-                        _stops: &ItemRange,
-                        _auxiliary_lists: &AuxiliaryLists) {
-        println!("TODO: gradient");
+                        rect: Rect<f32>,
+                        start_point: &Point2D<f32>,
+                        end_point: &Point2D<f32>,
+                        stops: &ItemRange,
+                        auxiliary_lists: &AuxiliaryLists) {
+        if let Some(..) = self.should_add_prim(&rect) {
+            let stops = auxiliary_lists.gradient_stops(stops);
+
+            // Fast paths for axis-aligned gradients:
+            if start_point.x == end_point.x {
+                let rect = Rect::new(Point2D::new(rect.origin.x, start_point.y),
+                                     Size2D::new(rect.size.width, end_point.y - start_point.y));
+                self.add_axis_aligned_gradient_with_stops(&rect,
+                                                          AxisDirection::Vertical,
+                                                          stops);
+            } else if start_point.y == end_point.y {
+                let rect = Rect::new(Point2D::new(start_point.x, rect.origin.y),
+                                     Size2D::new(end_point.x - start_point.x, rect.size.height));
+                self.add_axis_aligned_gradient_with_stops(&rect,
+                                                          AxisDirection::Horizontal,
+                                                          stops);
+                return
+            } else {
+                println!("TODO: Angle gradients!");
+            }
+        }
     }
 
     pub fn add_text(&mut self,
@@ -483,9 +545,11 @@ impl FrameBuilder {
                                        p1: run.rect.bottom_right(),
                                        st0: run.st0,
                                        st1: run.st1,
-                                       color: *color,
+                                       color0: *color,
+                                       color1: *color,
                                        kind: PrimitiveKind::Text,
-                                       padding: [0, 0, 0],
+                                       rect_kind: RectangleKind::Solid,
+                                       padding: [0, 0],
                                     },
                                     false);
             }
@@ -518,17 +582,19 @@ impl FrameBuilder {
                                    p1: rect.bottom_right(),
                                    st0: uv_rect.top_left,
                                    st1: uv_rect.bottom_right,
-                                   color: ColorF::new(1.0, 1.0, 1.0, 1.0),
+                                   color0: ColorF::new(1.0, 1.0, 1.0, 1.0),
+                                   color1: ColorF::new(1.0, 1.0, 1.0, 1.0),
                                    kind: PrimitiveKind::Image,
-                                   padding: [0, 0, 0],
+                                   rect_kind: RectangleKind::Solid,
+                                   padding: [0, 0],
                                },
                                image_info.is_opaque);
         }
     }
 
-    pub fn add_rectangle(&mut self,
-                         rect: Rect<f32>,
-                         color: ColorF) {
+    pub fn add_solid_rectangle(&mut self,
+                               rect: Rect<f32>,
+                               color: ColorF) {
         if color.a == 0.0 {
             return;
         }
@@ -541,11 +607,40 @@ impl FrameBuilder {
                                    p1: rect.bottom_right(),
                                    st0: Point2D::zero(),
                                    st1: Point2D::zero(),
-                                   color: color,
+                                   color0: color,
+                                   color1: color,
                                    kind: PrimitiveKind::Rectangle,
-                                   padding: [0, 0, 0],
+                                   rect_kind: RectangleKind::Solid,
+                                   padding: [0, 0],
                                },
                                color.a == 1.0);
+        }
+    }
+
+    pub fn add_complex_rectangle(&mut self,
+                                 rect: Rect<f32>,
+                                 color0: ColorF,
+                                 color1: ColorF,
+                                 rect_kind: RectangleKind) {
+        if color0.a == 0.0 && color1.a == 0.0 {
+            return;
+        }
+
+        if let Some(xf_rect) = self.should_add_prim(&rect) {
+            self.add_primitive(PrimitiveKind::Rectangle,
+                               xf_rect,
+                               PackedPrimitive {
+                                   p0: rect.origin,
+                                   p1: rect.bottom_right(),
+                                   st0: Point2D::zero(),
+                                   st1: Point2D::zero(),
+                                   color0: color0,
+                                   color1: color1,
+                                   kind: PrimitiveKind::Rectangle,
+                                   rect_kind: rect_kind,
+                                   padding: [0, 0],
+                               },
+                               color0.a == 1.0 && color1.a == 1.0);
         }
     }
 
@@ -589,20 +684,20 @@ impl FrameBuilder {
         let bottom_color = bottom.border_color(2.0/3.0, 1.0, 0.7, 0.3);
 
         // Edges
-        self.add_rectangle(Rect::new(Point2D::new(tl_outer.x, tl_inner.y),
-                                     Size2D::new(left.width, bl_inner.y - tl_inner.y)),
-                           left_color);
+        self.add_solid_rectangle(Rect::new(Point2D::new(tl_outer.x, tl_inner.y),
+                                           Size2D::new(left.width, bl_inner.y - tl_inner.y)),
+                                 left_color);
 
-        self.add_rectangle(Rect::new(Point2D::new(tl_inner.x, tl_outer.y),
-                                     Size2D::new(tr_inner.x - tl_inner.x, tr_outer.y + top.width - tl_outer.y)),
-                           top_color);
+        self.add_solid_rectangle(Rect::new(Point2D::new(tl_inner.x, tl_outer.y),
+                                           Size2D::new(tr_inner.x - tl_inner.x, tr_outer.y + top.width - tl_outer.y)),
+                                 top_color);
 
-        self.add_rectangle(Rect::new(Point2D::new(br_outer.x - right.width, tr_inner.y),
-                                     Size2D::new(right.width, br_inner.y - tr_inner.y)),
-                           right_color);
+        self.add_solid_rectangle(Rect::new(Point2D::new(br_outer.x - right.width, tr_inner.y),
+                                           Size2D::new(right.width, br_inner.y - tr_inner.y)),
+                                 right_color);
 
-        self.add_rectangle(Rect::new(Point2D::new(bl_inner.x, bl_outer.y - bottom.width),
-                                     Size2D::new(br_inner.x - bl_inner.x, br_outer.y - bl_outer.y + bottom.width)),
+        self.add_solid_rectangle(Rect::new(Point2D::new(bl_inner.x, bl_outer.y - bottom.width),
+                                           Size2D::new(br_inner.x - bl_inner.x, br_outer.y - bl_outer.y + bottom.width)),
                            bottom_color);
 
         // Corners
@@ -633,24 +728,24 @@ impl FrameBuilder {
             */
         }
 
-        self.add_rectangle(Rect::new(tl_outer,
-                                     Size2D::new(tl_inner.x - tl_outer.x,
-                                                 tl_inner.y - tl_outer.y)),
+        self.add_solid_rectangle(Rect::new(tl_outer,
+                                           Size2D::new(tl_inner.x - tl_outer.x,
+                                                       tl_inner.y - tl_outer.y)),
                            left_color);
 
-        self.add_rectangle(Rect::new(Point2D::new(tr_inner.x, tr_outer.y),
-                                     Size2D::new(tr_outer.x - tr_inner.x,
-                                                 tr_inner.y - tr_outer.y)),
+        self.add_solid_rectangle(Rect::new(Point2D::new(tr_inner.x, tr_outer.y),
+                                           Size2D::new(tr_outer.x - tr_inner.x,
+                                                       tr_inner.y - tr_outer.y)),
                            top_color);
 
-        self.add_rectangle(Rect::new(br_inner,
-                                     Size2D::new(br_outer.x - br_inner.x,
-                                                 br_outer.y - br_inner.y)),
+        self.add_solid_rectangle(Rect::new(br_inner,
+                                           Size2D::new(br_outer.x - br_inner.x,
+                                                       br_outer.y - br_inner.y)),
                            right_color);
 
-        self.add_rectangle(Rect::new(Point2D::new(bl_outer.x, bl_inner.y),
-                                     Size2D::new(bl_inner.x - bl_outer.x,
-                                                 bl_outer.y - bl_inner.y)),
+        self.add_solid_rectangle(Rect::new(Point2D::new(bl_outer.x, bl_inner.y),
+                                           Size2D::new(bl_inner.x - bl_outer.x,
+                                                       bl_outer.y - bl_inner.y)),
                            bottom_color);
 
         if need_clip {
@@ -808,7 +903,7 @@ impl FrameBuilder {
                 layer_index_in_ubo: layer_index_in_ubo,
                 other_primitives: others,
             })
-        } else if prim.intersecting_prims_behind.len() < 7 {
+        } else if prim.intersecting_prims_behind.len() < 6 {
             let mut others = Vec::new();
             for other_prim_index in &prim.intersecting_prims_behind {
                 let other_prim_index = *other_prim_index;
@@ -816,7 +911,7 @@ impl FrameBuilder {
                 others.push((other_prim_index, other_prim.layer));
             }
             Some(RenderPrimitive {
-                shader: PrimitiveShader::Generic6,
+                shader: PrimitiveShader::Generic5,
                 key: key,
                 layer_index_in_ubo: layer_index_in_ubo,
                 other_primitives: others,

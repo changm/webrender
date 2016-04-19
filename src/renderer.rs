@@ -199,7 +199,7 @@ pub struct Renderer {
     text_program_id: ProgramId,
     generic2_shader: ProgramId,
     generic4_shader: ProgramId,
-    generic6_shader: ProgramId,
+    generic5_shader: ProgramId,
     error_shader: ProgramId,
 
     notifier: Arc<Mutex<Option<Box<RenderNotifier>>>>,
@@ -258,7 +258,7 @@ impl Renderer {
         let error_shader = create_prim_shader("prim_error", &mut device);
         let generic2_shader = create_prim_shader("prim_generic_2", &mut device);
         let generic4_shader = create_prim_shader("prim_generic_4", &mut device);
-        let generic6_shader = create_prim_shader("prim_generic_6", &mut device);
+        let generic5_shader = create_prim_shader("prim_generic_5", &mut device);
 
         let texture_ids = device.create_texture_ids(1024);
         let mut texture_cache = TextureCache::new(texture_ids);
@@ -401,7 +401,7 @@ impl Renderer {
             opaque_image_shader: opaque_image_shader,
             generic2_shader: generic2_shader,
             generic4_shader: generic4_shader,
-            generic6_shader: generic6_shader,
+            generic5_shader: generic5_shader,
             text_rect_shader: text_rect_shader,
             text_program_id: text_program_id,
             error_shader: error_shader,
@@ -1435,7 +1435,7 @@ impl Renderer {
                     PrimitiveShader::OpaqueImage => self.opaque_image_shader,
                     PrimitiveShader::Generic2 => self.generic2_shader,
                     PrimitiveShader::Generic4 => self.generic4_shader,
-                    PrimitiveShader::Generic6 => self.generic6_shader,
+                    PrimitiveShader::Generic5 => self.generic5_shader,
                     PrimitiveShader::Error => self.error_shader,
                 };
                 self.device.bind_program(program_id, &projection);
