@@ -21,7 +21,7 @@ use texture_cache::TexturePage;
 use util::{self, RectHelpers};
 use webrender_traits::{ColorF, FontKey, GlyphInstance, ImageKey, ImageRendering, ComplexClipRegion};
 use webrender_traits::{BorderDisplayItem, BorderStyle, ItemRange, AuxiliaryLists, BorderRadius};
-use webrender_traits::{GradientStop};
+use webrender_traits::{BoxShadowClipMode, GradientStop};
 
 const MAX_PRIMITIVES_PER_PASS: usize = 4;
 const INVALID_PRIM_INDEX: u32 = 0xffffffff;
@@ -580,6 +580,18 @@ impl FrameBuilder {
                                     false);
             }
         }
+    }
+
+    pub fn add_box_shadow(&mut self,
+                          box_bounds: &Rect<f32>,
+                          box_offset: &Point2D<f32>,
+                          color: &ColorF,
+                          blur_radius: f32,
+                          spread_radius: f32,
+                          border_radius: f32,
+                          clip_mode: BoxShadowClipMode,
+                          resource_cache: &ResourceCache,
+                          frame_id: FrameId) {
     }
 
     pub fn add_image(&mut self,

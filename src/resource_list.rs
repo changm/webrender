@@ -3,8 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use app_units::Au;
+use euclid::Rect;
 use fnv::FnvHasher;
-use internal_types::{Glyph, GlyphKey, RasterItem};
+use internal_types::{Glyph, GlyphKey, RasterItem, BoxShadowRasterOp};
 use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::hash::BuildHasherDefault;
@@ -18,7 +19,7 @@ pub struct ResourceList {
     required_images: RequiredImageSet,
     required_glyphs: RequiredGlyphMap,
     required_rasters: RequiredRasterSet,
-    _device_pixel_ratio: f32,
+    device_pixel_ratio: f32,
 }
 
 impl ResourceList {
@@ -27,7 +28,7 @@ impl ResourceList {
             required_glyphs: HashMap::with_hasher(Default::default()),
             required_images: HashSet::with_hasher(Default::default()),
             required_rasters: HashSet::with_hasher(Default::default()),
-            _device_pixel_ratio: device_pixel_ratio,
+            device_pixel_ratio: device_pixel_ratio,
         }
     }
 
@@ -50,7 +51,6 @@ impl ResourceList {
         }
     }
 
-/*
     pub fn add_box_shadow_corner(&mut self,
                                  blur_radius: f32,
                                  border_radius: f32,
@@ -77,7 +77,7 @@ impl ResourceList {
                                                                   self.device_pixel_ratio) {
             self.required_rasters.insert(RasterItem::BoxShadow(raster_item));
         }
-    }*/
+    }
 
     pub fn for_each_image<F>(&self, mut f: F) where F: FnMut(ImageKey, ImageRendering) {
         for &(image_id, image_rendering) in &self.required_images {

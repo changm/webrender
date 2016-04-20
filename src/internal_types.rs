@@ -24,6 +24,10 @@ use webrender_traits::{ImageFormat, MixBlendMode, NativeFontHandle, DisplayItem,
 pub struct DevicePixel(i32);
 
 impl DevicePixel {
+    pub fn new(value: f32, device_pixel_ratio: f32) -> DevicePixel {
+        DevicePixel((value * device_pixel_ratio).round() as i32)
+    }
+
     pub fn from_u32(value: u32) -> DevicePixel {
         DevicePixel(value as i32)
     }
@@ -32,6 +36,12 @@ impl DevicePixel {
     pub fn as_f32(&self) -> f32 {
         let DevicePixel(value) = *self;
         value as f32
+    }
+
+    // TODO(gw): Remove eventually...
+    pub fn as_u32(&self) -> u32 {
+        let DevicePixel(value) = *self;
+        value as u32
     }
 }
 
@@ -291,8 +301,8 @@ pub enum TextureUpdateDetails {
     Raw,
     Blit(Vec<u8>),
     Blur(Vec<u8>, Size2D<u32>, Au, TextureImage, TextureImage, BorderType),
-    // /// Blur radius, border radius, box size, raster origin, and whether inverted, respectively.
-    //BoxShadow(DevicePixel, DevicePixel, Size2D<DevicePixel>, Point2D<DevicePixel>, bool, BorderType),
+    /// Blur radius, border radius, box size, raster origin, and whether inverted, respectively.
+    BoxShadow(DevicePixel, DevicePixel, Size2D<DevicePixel>, Point2D<DevicePixel>, bool, BorderType),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -560,7 +570,6 @@ impl PackedVertexForTextureCacheUpdate {
     }
 }
 
-/*
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct BoxShadowRasterOp {
     pub blur_radius: DevicePixel,
@@ -660,15 +669,12 @@ impl BoxShadowRasterOp {
         }
     }
 }
-*/
 
-/*
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
 pub enum BoxShadowPart {
     Corner,
     Edge,
 }
-*/
 
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
 pub struct GlyphKey {
@@ -691,7 +697,7 @@ impl GlyphKey {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub enum RasterItem {
-    //BoxShadow(BoxShadowRasterOp),
+    BoxShadow(BoxShadowRasterOp),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

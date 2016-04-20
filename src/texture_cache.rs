@@ -803,11 +803,9 @@ impl TextureCache {
     }
 
     pub fn insert_raster_op(&mut self,
-                            _image_id: TextureCacheItemId,
-                            _item: &RasterItem,
-                            _device_pixel_ratio: f32) {
-        panic!("todo");
-        /*
+                            image_id: TextureCacheItemId,
+                            item: &RasterItem,
+                            device_pixel_ratio: f32) {
         let update_op = match item {
             &RasterItem::BoxShadow(ref op) => {
                 let allocation = self.allocate(image_id,
@@ -818,7 +816,8 @@ impl TextureCache {
                                                ImageFormat::RGBA8,
                                                TextureCacheItemKind::Standard,
                                                BorderType::SinglePixel,
-                                               TextureFilter::Linear);
+                                               TextureFilter::Linear,
+                                               false);
 
                 // TODO(pcwalton): Handle large box shadows not fitting in texture cache page.
                 assert!(allocation.kind == AllocationKind::TexturePage);
@@ -844,7 +843,6 @@ impl TextureCache {
         };
 
         self.pending_updates.push(update_op);
-        */
     }
 
     pub fn add_raw_update(&mut self, id: TextureId, size: Size2D<i32>) {

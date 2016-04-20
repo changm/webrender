@@ -12,7 +12,7 @@ use internal_types::{RendererFrame, ResultMsg, TextureUpdateOp};
 use internal_types::{TextureUpdateDetails, TextureUpdateList, PackedVertex, RenderTargetMode};
 use internal_types::{ORTHO_NEAR_PLANE, ORTHO_FAR_PLANE};
 use internal_types::{PackedVertexForTextureCacheUpdate, CompositionOp};
-use internal_types::{AxisDirection};
+use internal_types::{AxisDirection, DevicePixel};
 use internal_types::{FontVertex};
 use ipc_channel::ipc;
 use profiler::{Profiler, BackendProfileCounters};
@@ -133,7 +133,7 @@ pub struct Renderer {
     filter_program_id: ProgramId,
     u_filter_params: UniformLocation,
 
-    //box_shadow_program_id: ProgramId,
+    box_shadow_program_id: ProgramId,
 
     blur_program_id: ProgramId,
     u_direction: UniformLocation,
@@ -190,7 +190,7 @@ impl Renderer {
         let quad_program_id = ProgramId(0);// device.create_program("quad");
         let blend_program_id = ProgramId(0);//device.create_program("blend");
         let filter_program_id = ProgramId(0);//device.create_program("filter");
-        //let box_shadow_program_id = ProgramId(0);//device.create_program("box_shadow");
+        let box_shadow_program_id = ProgramId(0);//device.create_program("box_shadow");
         let blur_program_id = ProgramId(0);//device.create_program("blur");
         let max_raster_op_size = MAX_RASTER_OP_SIZE * options.device_pixel_ratio as u32;
         let max_ubo_size = gl::get_integer_v(gl::MAX_UNIFORM_BLOCK_SIZE) as usize;
@@ -343,7 +343,7 @@ impl Renderer {
             blend_program_id: blend_program_id,
             filter_program_id: filter_program_id,
             quad_program_id: quad_program_id,
-            //box_shadow_program_id: box_shadow_program_id,
+            box_shadow_program_id: box_shadow_program_id,
             blur_program_id: blur_program_id,
             opaque_rect_shader: opaque_rect_shader,
             opaque_rect_shader_clip: opaque_rect_shader_clip,
@@ -706,7 +706,6 @@ impl Renderer {
                                     ]
                                 });
                             }
-                            /*
                             TextureUpdateDetails::BoxShadow(blur_radius,
                                                             border_radius,
                                                             box_rect_size,
@@ -725,7 +724,6 @@ impl Renderer {
                                     inverted,
                                     border_type)
                             }
-                            */
                         }
                     }
                 }
@@ -735,7 +733,6 @@ impl Renderer {
         self.flush_raster_batches();
     }
 
-/*
     fn update_texture_cache_for_box_shadow(&mut self,
                                            update_id: TextureId,
                                            texture_rect: &Rect<u32>,
@@ -816,7 +813,6 @@ impl Renderer {
             ]
         });
     }
-*/
 
     fn add_rect_to_raster_batch<F>(&mut self,
                                    dest_texture_id: TextureId,

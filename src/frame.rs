@@ -527,19 +527,16 @@ impl Frame {
                                                      &info.stops,
                                                      auxiliary_lists);
                             }
-                            SpecificDisplayItem::BoxShadow(ref _info) => {
-//                                println!("TODO: BoxShadow");
-                                /*
-                                builder.add_box_shadow(&info.box_bounds,
-                                                       &info.offset,
-                                                       &info.color,
-                                                       info.blur_radius,
-                                                       info.spread_radius,
-                                                       info.border_radius,
-                                                       info.clip_mode,
-                                                       resource_cache,
-                                                       frame_id);
-                                                       */
+                            SpecificDisplayItem::BoxShadow(ref box_shadow_info) => {
+                                builder.add_box_shadow(&box_shadow_info.box_bounds,
+                                                       &box_shadow_info.offset,
+                                                       &box_shadow_info.color,
+                                                       box_shadow_info.blur_radius,
+                                                       box_shadow_info.spread_radius,
+                                                       box_shadow_info.border_radius,
+                                                       box_shadow_info.clip_mode,
+                                                       context.resource_cache,
+                                                       self.id);
                             }
                             SpecificDisplayItem::Border(ref info) => {
                                 builder.add_border(item.rect, info);
