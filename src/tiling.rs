@@ -950,7 +950,7 @@ impl FrameBuilder {
                         shader: PrimitiveShader::Generic2,
                         key: key,
                         layer_index_in_ubo: layer_index_in_ubo,
-                        clip_index_in_ubo: None,
+                        clip_index_in_ubo: clip_index_in_ubo,
                         other_primitives: Vec::new(),
                     })
                 }
@@ -973,7 +973,7 @@ impl FrameBuilder {
                         shader: PrimitiveShader::Generic2,
                         key: key,
                         layer_index_in_ubo: layer_index_in_ubo,
-                        clip_index_in_ubo: None,
+                        clip_index_in_ubo: clip_index_in_ubo,
                         other_primitives: vec![(back_prim_index, back_prim.layer)],
                     })
                 }
