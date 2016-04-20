@@ -292,24 +292,17 @@ impl VertexFormat {
             }
             VertexFormat::Triangles => {
                 gl::enable_vertex_attrib_array(VertexAttribute::Position as gl::GLuint);
-                gl::enable_vertex_attrib_array(VertexAttribute::PositionRect as gl::GLuint);
 
                 self.set_divisors(0);
 
                 let vertex_stride = mem::size_of::<PackedVertex>() as gl::GLuint;
 
                 gl::vertex_attrib_pointer(VertexAttribute::Position as gl::GLuint,
-                                          2,
+                                          3,
                                           gl::FLOAT,
                                           false,
                                           vertex_stride as gl::GLint,
                                           0 + vertex_stride * offset);
-                gl::vertex_attrib_pointer(VertexAttribute::PositionRect as gl::GLuint,
-                                          4,
-                                          gl::FLOAT,
-                                          false,
-                                          vertex_stride as gl::GLint,
-                                          8 + vertex_stride * offset);
             }
             VertexFormat::RasterOp => {
                 gl::enable_vertex_attrib_array(VertexAttribute::Position as gl::GLuint);
@@ -426,7 +419,6 @@ impl VertexFormat {
             }
             VertexFormat::Triangles => {
                 gl::disable_vertex_attrib_array(VertexAttribute::Position as gl::GLuint);
-                gl::disable_vertex_attrib_array(VertexAttribute::PositionRect as gl::GLuint);
             }
             VertexFormat::RasterOp => {
                 gl::disable_vertex_attrib_array(VertexAttribute::Position as gl::GLuint);

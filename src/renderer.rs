@@ -271,26 +271,29 @@ impl Renderer {
 
         let x0 = 0.0;
         let y0 = 0.0;
-        let x1 = 1.0;//options.tile_size.width as f32;
-        let y1 = 1.0;//options.tile_size.height as f32;
+        let x1 = 1.0;
+        let y1 = 1.0;
 
-        let quad_indices: [u16; 6] = [ 0, 1, 2, 2, 3, 1 ];
+        // TODO(gw): Consider separate VBO for quads vs border corners if VS ever shows up in profile!
+        let quad_indices: [u16; 6] = [ 0, 1, 2, 3, 4, 5 ];
         let quad_vertices = [
             PackedVertex {
-                pos: [x0, y0],
-                rect: [x0, y0, x1, y1],
+                pos: [x0, y0, 0.0],
             },
             PackedVertex {
-                pos: [x1, y0],
-                rect: [x0, y0, x1, y1],
+                pos: [x1, y0, 0.0],
             },
             PackedVertex {
-                pos: [x0, y1],
-                rect: [x0, y0, x1, y1],
+                pos: [x0, y1, 0.0],
             },
             PackedVertex {
-                pos: [x1, y1],
-                rect: [x0, y0, x1, y1],
+                pos: [x0, y1, 1.0],
+            },
+            PackedVertex {
+                pos: [x1, y1, 1.0],
+            },
+            PackedVertex {
+                pos: [x1, y0, 1.0],
             },
         ];
 

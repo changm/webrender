@@ -33,6 +33,16 @@ pub enum RectangleKind {
     Solid,
     HorizontalGradient,
     VerticalGradient,
+    BorderCorner,
+}
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum RotationKind {
+    Angle0,
+    Angle90,
+    Angle180,
+    Angle270,
 }
 
 #[derive(Clone, Debug)]
@@ -162,6 +172,7 @@ pub enum PrimitiveKind {
     Image,
     Gradient,
     Text,
+    BorderCorner,
 
     Invalid,
 }
@@ -211,7 +222,8 @@ pub struct PackedPrimitive {
     pub color1: ColorF,
     pub kind: PrimitiveKind,
     pub rect_kind: RectangleKind,
-    pub padding: [u32; 2],
+    pub rotation: RotationKind,
+    pub padding: u32,
 }
 
 #[derive(Debug)]
@@ -561,7 +573,8 @@ impl FrameBuilder {
                                        color1: *color,
                                        kind: PrimitiveKind::Text,
                                        rect_kind: RectangleKind::Solid,
-                                       padding: [0, 0],
+                                       rotation: RotationKind::Angle0,
+                                       padding: 0,
                                     },
                                     None,
                                     false);
@@ -599,7 +612,8 @@ impl FrameBuilder {
                                    color1: ColorF::new(1.0, 1.0, 1.0, 1.0),
                                    kind: PrimitiveKind::Image,
                                    rect_kind: RectangleKind::Solid,
-                                   padding: [0, 0],
+                                   rotation: RotationKind::Angle0,
+                                   padding: 0,
                                },
                                None,
                                image_info.is_opaque);
@@ -626,18 +640,49 @@ impl FrameBuilder {
                                    color1: color,
                                    kind: PrimitiveKind::Rectangle,
                                    rect_kind: RectangleKind::Solid,
-                                   padding: [0, 0],
+                                   rotation: RotationKind::Angle0,
+                                   padding: 0,
                                },
                                clip,
                                color.a == 1.0);
         }
     }
 
-    pub fn add_complex_rectangle(&mut self,
-                                 rect: Rect<f32>,
-                                 color0: ColorF,
-                                 color1: ColorF,
-                                 rect_kind: RectangleKind) {
+    pub fn add_border_corner(&mut self,
+                             rect: Rect<f32>,
+                             color0: ColorF,
+                             color1: ColorF,
+                             rotation: RotationKind,
+                             clip: Option<Clip>) {
+        if color0.a == 0.0 && color1.a == 0.0 {
+            return;
+        }
+
+        if let Some(xf_rect) = self.should_add_prim(&rect) {
+            self.add_primitive(PrimitiveKind::BorderCorner,
+                               xf_rect,
+                               PackedPrimitive {
+                                   p0: rect.origin,
+                                   p1: rect.bottom_right(),
+                                   st0: Point2D::zero(),
+                                   st1: Point2D::zero(),
+                                   color0: color0,
+                                   color1: color1,
+                                   kind: PrimitiveKind::BorderCorner,
+                                   rect_kind: RectangleKind::BorderCorner,
+                                   rotation: rotation,
+                                   padding: 0,
+                               },
+                               clip,
+                               color0.a == 1.0 && color1.a == 1.0);
+        }
+    }
+
+    fn add_complex_rectangle(&mut self,
+                             rect: Rect<f32>,
+                             color0: ColorF,
+                             color1: ColorF,
+                             rect_kind: RectangleKind) {
         if color0.a == 0.0 && color1.a == 0.0 {
             return;
         }
@@ -654,7 +699,8 @@ impl FrameBuilder {
                                    color1: color1,
                                    kind: PrimitiveKind::Rectangle,
                                    rect_kind: rect_kind,
-                                   padding: [0, 0],
+                                   rotation: RotationKind::Angle0,
+                                   padding: 0,
                                },
                                None,
                                color0.a == 1.0 && color1.a == 1.0);
@@ -727,9 +773,8 @@ impl FrameBuilder {
                         radius.bottom_left != Size2D::zero() ||
                         radius.bottom_right != Size2D::zero();
 
-        if need_clip {
+        let clip = if need_clip {
             // TODO(gw): This is all wrong for non-uniform borders!
-            /*
             let inner_radius = BorderRadius {
                 top_left: Size2D::new(radius.top_left.width - left.width,
                                       radius.top_left.width - left.width),
@@ -741,41 +786,44 @@ impl FrameBuilder {
                                           radius.bottom_right.width - right.width),
             };
 
-            let clip = Clip::from_border_radius(&rect,
-                                                radius,
-                                                &inner_radius);
+            Some(Clip::from_border_radius(&rect,
+                                          radius,
+                                          &inner_radius))
+        } else {
+            None
+        };
 
-            //self.set_clip(clip);
-            */
-        }
-
-        self.add_solid_rectangle(Rect::new(tl_outer,
-                                           Size2D::new(tl_inner.x - tl_outer.x,
-                                                       tl_inner.y - tl_outer.y)),
+        self.add_border_corner(Rect::new(tl_outer,
+                                         Size2D::new(tl_inner.x - tl_outer.x,
+                                                     tl_inner.y - tl_outer.y)),
                            left_color,
-                           None);
-
-        self.add_solid_rectangle(Rect::new(Point2D::new(tr_inner.x, tr_outer.y),
-                                           Size2D::new(tr_outer.x - tr_inner.x,
-                                                       tr_inner.y - tr_outer.y)),
                            top_color,
-                           None);
+                           RotationKind::Angle0,
+                           clip.clone());
 
-        self.add_solid_rectangle(Rect::new(br_inner,
-                                           Size2D::new(br_outer.x - br_inner.x,
-                                                       br_outer.y - br_inner.y)),
+        self.add_border_corner(Rect::new(Point2D::new(tr_inner.x, tr_outer.y),
+                                         Size2D::new(tr_outer.x - tr_inner.x,
+                                                     tr_inner.y - tr_outer.y)),
+                           top_color,
                            right_color,
-                           None);
+                           RotationKind::Angle90,
+                           clip.clone());
 
-        self.add_solid_rectangle(Rect::new(Point2D::new(bl_outer.x, bl_inner.y),
-                                           Size2D::new(bl_inner.x - bl_outer.x,
-                                                       bl_outer.y - bl_inner.y)),
+        self.add_border_corner(Rect::new(br_inner,
+                                         Size2D::new(br_outer.x - br_inner.x,
+                                                     br_outer.y - br_inner.y)),
+                           right_color,
                            bottom_color,
-                           None);
+                           RotationKind::Angle180,
+                           clip.clone());
 
-        if need_clip {
-            //self.clear_clip();
-        }
+        self.add_border_corner(Rect::new(Point2D::new(bl_outer.x, bl_inner.y),
+                                         Size2D::new(bl_inner.x - bl_outer.x,
+                                                     bl_outer.y - bl_inner.y)),
+                           bottom_color,
+                           left_color,
+                           RotationKind::Angle270,
+                           clip.clone());
     }
 
     // TODO(gw): This is brute force currently for testing GPU
