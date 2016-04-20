@@ -422,7 +422,7 @@ impl FrameBuilder {
 
         let template = LayerTemplate {
             packed: PackedLayer {
-                inv_transform: transform.invert(),
+                inv_transform: scroll_transform.invert(),
                 transform: scroll_transform,
                 screen_vertices: layer_rect.vertices,
             },
