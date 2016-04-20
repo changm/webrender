@@ -429,7 +429,8 @@ impl Frame {
 
                     let mut frame_builder = FrameBuilder::new(root_pipeline.viewport_size,
                                                               Point2D::new(self.scroll_offset.x as f32,
-                                                                           self.scroll_offset.y as f32));
+                                                                           self.scroll_offset.y as f32),
+                                                              device_pixel_ratio);
 
                     frame_builder.push_layer(root_stacking_context.stacking_context.bounds,
                                              Matrix4D::identity(),

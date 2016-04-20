@@ -129,11 +129,14 @@ pub struct ResourceCache {
     texture_cache: TextureCache,
 
     pending_raster_jobs: Vec<GlyphRasterJob>,
+
+    white_image_id: TextureCacheItemId,
 }
 
 impl ResourceCache {
     pub fn new(thread_pool: &mut scoped_threadpool::Pool,
                texture_cache: TextureCache,
+               white_image_id: TextureCacheItemId,
                device_pixel_ratio: f32,
                enable_aa: bool) -> ResourceCache {
 
@@ -161,6 +164,7 @@ impl ResourceCache {
             image_templates: HashMap::with_hasher(Default::default()),
             texture_cache: texture_cache,
             pending_raster_jobs: Vec::new(),
+            white_image_id: white_image_id,
             device_pixel_ratio: device_pixel_ratio,
             enable_aa: enable_aa,
         }
@@ -382,12 +386,12 @@ impl ResourceCache {
     pub fn get_dummy_mask_image(&self) -> &TextureCacheItem {
         self.texture_cache.get(self.dummy_mask_image_id)
     }
+*/
 
     #[inline]
     pub fn get_dummy_color_image(&self) -> &TextureCacheItem {
         self.texture_cache.get(self.white_image_id)
     }
-*/
 
     #[inline]
     pub fn get_glyph(&self, glyph_key: &GlyphKey, frame_id: FrameId) -> Option<&TextureCacheItem> {
@@ -405,13 +409,11 @@ impl ResourceCache {
         self.texture_cache.get(image_info.texture_cache_id)
     }
 
-/*
     #[inline]
     pub fn get_raster(&self, raster_item: &RasterItem, frame_id: FrameId) -> &TextureCacheItem {
         let image_id = self.cached_rasters.get(raster_item, frame_id);
         self.texture_cache.get(*image_id)
     }
-*/
 
 /*
     #[inline]

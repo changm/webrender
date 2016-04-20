@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
-use texture_cache::{TextureCache};
+use texture_cache::{TextureCache, TextureCacheItemId};
 use tiling::FrameBuilderConfig;
 use webrender_traits::{ApiMsg, AuxiliaryLists, BuiltDisplayList, IdNamespace, RenderNotifier};
 use webrender_traits::{WebGLContextId};//, ScrollLayerId};
@@ -49,6 +49,7 @@ impl RenderBackend {
                payload_tx: IpcBytesSender,
                result_tx: Sender<ResultMsg>,
                device_pixel_ratio: f32,
+               white_image_id: TextureCacheItemId,
                texture_cache: TextureCache,
                enable_aa: bool,
                notifier: Arc<Mutex<Option<Box<RenderNotifier>>>>,
@@ -58,6 +59,7 @@ impl RenderBackend {
 
         let resource_cache = ResourceCache::new(&mut thread_pool,
                                                 texture_cache,
+                                                white_image_id,
                                                 device_pixel_ratio,
                                                 enable_aa);
 

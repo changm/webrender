@@ -16,7 +16,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::mem;
 use std::hash::{Hash, BuildHasherDefault};
-use texture_cache::TexturePage;
+use texture_cache::{TextureCacheItem, TexturePage};
 use util::{self, RectHelpers};
 use webrender_traits::{ColorF, FontKey, GlyphInstance, ImageKey, ImageRendering, ComplexClipRegion};
 use webrender_traits::{BorderDisplayItem, BorderStyle, ItemRange, AuxiliaryLists, BorderRadius};
@@ -396,11 +396,13 @@ pub struct FrameBuilder {
     mask_texture_id: TextureId,
     text_buffer: TextBuffer,
     scroll_offset: Point2D<f32>,
+    device_pixel_ratio: f32,
 }
 
 impl FrameBuilder {
     pub fn new(viewport_size: Size2D<f32>,
-               scroll_offset: Point2D<f32>,) -> FrameBuilder {
+               scroll_offset: Point2D<f32>,
+               device_pixel_ratio: f32) -> FrameBuilder {
         FrameBuilder {
             screen_rect: Rect::new(Point2D::zero(),
                                    Size2D::new(viewport_size.width as i32, viewport_size.height as i32)),
@@ -412,6 +414,7 @@ impl FrameBuilder {
             mask_texture_id: TextureId(0),
             text_buffer: TextBuffer::new(TEXT_TARGET_SIZE),
             scroll_offset: scroll_offset,
+            device_pixel_ratio: device_pixel_ratio,
         }
     }
 
@@ -601,15 +604,13 @@ impl FrameBuilder {
                              clip_mode: BoxShadowClipMode,
                              resource_cache: &ResourceCache,
                              frame_id: FrameId,
-                             /*rotation_angle: BasicRotationAngle*/) {
+                             rotation_angle: RotationKind) {
         let corner_area_rect =
             Rect::new(*corner_area_top_left,
                       Size2D::new(corner_area_bottom_right.x - corner_area_top_left.x,
                                   corner_area_bottom_right.y - corner_area_top_left.y));
 
-        println!("todo - box shadow corner");
-        /*
-        self.push_clip_in_rect(&corner_area_rect);
+        //self.push_clip_in_rect(&corner_area_rect);
 
         let inverted = match clip_mode {
             BoxShadowClipMode::Outset | BoxShadowClipMode::None => false,
@@ -628,16 +629,14 @@ impl FrameBuilder {
             None => resource_cache.get_dummy_color_image(),
         };
 
-        self.add_color_image_rectangle(top_left,
-                                       bottom_right,
-                                       color,
-                                       color,
-                                       &color_image,
-                                       resource_cache,
-                                       rotation_angle);
+        self.add_texture_rect(&Rect::new(*top_left, Size2D::new(bottom_right.x - top_left.x,
+                                                                bottom_right.y - top_left.y)),
+                              color,
+                              &color_image,
+                              rotation_angle,
+                              None);
 
         //self.pop_clip_in_rect();
-        */
     }
 
     fn add_box_shadow_edge(&mut self,
@@ -650,13 +649,11 @@ impl FrameBuilder {
                            clip_mode: BoxShadowClipMode,
                            resource_cache: &ResourceCache,
                            frame_id: FrameId,
-                           /*rotation_angle: BasicRotationAngle*/) {
+                           rotation_angle: RotationKind) {
         if top_left.x >= bottom_right.x || top_left.y >= bottom_right.y {
             return
         }
 
-        println!("todo - box shadow edge");
-        /*
         let inverted = match clip_mode {
             BoxShadowClipMode::Outset | BoxShadowClipMode::None => false,
             BoxShadowClipMode::Inset => true,
@@ -674,13 +671,12 @@ impl FrameBuilder {
             None => resource_cache.get_dummy_color_image(),
         };
 
-        self.add_color_image_rectangle(top_left,
-                                       bottom_right,
-                                       color,
-                                       color,
-                                       &color_image,
-                                       resource_cache,
-                                       rotation_angle)*/
+        self.add_texture_rect(&Rect::new(*top_left, Size2D::new(bottom_right.x - top_left.x,
+                                                                bottom_right.y - top_left.y)),
+                              color,
+                              &color_image,
+                              rotation_angle,
+                              None)
     }
 
     fn add_box_shadow_sides(&mut self,
@@ -736,7 +732,7 @@ impl FrameBuilder {
                                  clip_mode,
                                  resource_cache,
                                  frame_id,
-                                 /*BasicRotationAngle::Clockwise90*/);
+                                 RotationKind::Angle90);
         self.add_box_shadow_edge(&right_rect.origin,
                                  &right_rect.bottom_right(),
                                  &rect,
@@ -746,7 +742,7 @@ impl FrameBuilder {
                                  clip_mode,
                                  resource_cache,
                                  frame_id,
-                                 /*BasicRotationAngle::Clockwise180*/);
+                                 RotationKind::Angle180);
         self.add_box_shadow_edge(&bottom_rect.origin,
                                  &bottom_rect.bottom_right(),
                                  &rect,
@@ -756,7 +752,7 @@ impl FrameBuilder {
                                  clip_mode,
                                  resource_cache,
                                  frame_id,
-                                 /*BasicRotationAngle::Clockwise270*/);
+                                 RotationKind::Angle270);
         self.add_box_shadow_edge(&left_rect.origin,
                                  &left_rect.bottom_right(),
                                  &rect,
@@ -766,7 +762,7 @@ impl FrameBuilder {
                                  clip_mode,
                                  resource_cache,
                                  frame_id,
-                                 /*BasicRotationAngle::Upright*/);
+                                 RotationKind::Angle0);
 
         //self.undo_clip_state(clip_state);
     }
@@ -817,7 +813,7 @@ impl FrameBuilder {
                                    clip_mode,
                                    resource_cache,
                                    frame_id,
-                                   /*BasicRotationAngle::Upright*/);
+                                   RotationKind::Angle0);
         self.add_box_shadow_corner(&Point2D::new(metrics.tr_outer.x - metrics.edge_size,
                                                  metrics.tr_outer.y),
                                    &Point2D::new(metrics.tr_outer.x,
@@ -831,7 +827,7 @@ impl FrameBuilder {
                                    clip_mode,
                                    resource_cache,
                                    frame_id,
-                                   /*BasicRotationAngle::Clockwise90*/);
+                                   RotationKind::Angle90);
         self.add_box_shadow_corner(&Point2D::new(metrics.br_outer.x - metrics.edge_size,
                                                  metrics.br_outer.y - metrics.edge_size),
                                    &Point2D::new(metrics.br_outer.x, metrics.br_outer.y),
@@ -844,7 +840,7 @@ impl FrameBuilder {
                                    clip_mode,
                                    resource_cache,
                                    frame_id,
-                                   /*BasicRotationAngle::Clockwise180*/);
+                                   RotationKind::Angle180);
         self.add_box_shadow_corner(&Point2D::new(metrics.bl_outer.x,
                                                  metrics.bl_outer.y - metrics.edge_size),
                                    &Point2D::new(metrics.bl_outer.x + metrics.edge_size,
@@ -858,7 +854,7 @@ impl FrameBuilder {
                                    clip_mode,
                                    resource_cache,
                                    frame_id,
-                                   /*BasicRotationAngle::Clockwise270*/);
+                                   RotationKind::Angle270);
 
         //self.undo_clip_state(clip_state);
     }
@@ -869,9 +865,7 @@ impl FrameBuilder {
                                              color: &ColorF,
                                              blur_radius: f32,
                                              spread_radius: f32,
-                                             border_radius: f32,
-                                             resource_cache: &ResourceCache,
-                                             frame_id: FrameId) {
+                                             border_radius: f32) {
         let rect = compute_box_shadow_rect(box_bounds, box_offset, spread_radius);
         let metrics = BoxShadowMetrics::new(&rect, border_radius, blur_radius);
 
@@ -934,7 +928,7 @@ impl FrameBuilder {
                           spread_radius: f32,
                           border_radius: f32,
                           clip_mode: BoxShadowClipMode,
-                          resource_cache: &ResourceCache,
+                          resource_cache: &mut ResourceCache,
                           frame_id: FrameId) {
         let rect = compute_box_shadow_rect(box_bounds, box_offset, spread_radius);
 
@@ -943,6 +937,28 @@ impl FrameBuilder {
             self.add_solid_rectangle(&rect, color, None);
             return;
         }
+
+        // TODO(gw): hack hack - do this elsewhere!
+        let mut resource_list = ResourceList::new(self.device_pixel_ratio);
+        resource_list.add_box_shadow_corner(blur_radius,
+                                            border_radius,
+                                            &rect,
+                                            false);
+        resource_list.add_box_shadow_edge(blur_radius,
+                                          border_radius,
+                                          &rect,
+                                          false);
+        if clip_mode == BoxShadowClipMode::Inset {
+            resource_list.add_box_shadow_corner(blur_radius,
+                                                border_radius,
+                                                &rect,
+                                                true);
+            resource_list.add_box_shadow_edge(blur_radius,
+                                              border_radius,
+                                              &rect,
+                                              true);
+        }
+        resource_cache.add_resource_list(&resource_list, frame_id);
 
         // Draw the corners.
         self.add_box_shadow_corners(box_bounds,
@@ -997,9 +1013,7 @@ impl FrameBuilder {
                                                            color,
                                                            blur_radius,
                                                            spread_radius,
-                                                           border_radius,
-                                                           resource_cache,
-                                                           frame_id);
+                                                           border_radius);
             }
         }
     }
@@ -1067,6 +1081,41 @@ impl FrameBuilder {
                                },
                                clip,
                                color.a == 1.0);
+        }
+    }
+
+    fn add_texture_rect(&mut self,
+                        rect: &Rect<f32>,
+                        color: &ColorF,
+                        texture_item: &TextureCacheItem,
+                        rotation: RotationKind,
+                        clip: Option<Clip>) {
+        if color.a == 0.0 {
+            return;
+        }
+
+        if let Some(xf_rect) = self.should_add_prim(&rect) {
+            let uv_rect = texture_item.uv_rect();
+
+            assert!(self.color_texture_id == TextureId(0) || self.color_texture_id == texture_item.texture_id);
+            self.color_texture_id = texture_item.texture_id;
+
+            self.add_primitive(PrimitiveKind::Image,
+                               xf_rect,
+                               PackedPrimitive {
+                                   p0: rect.origin,
+                                   p1: rect.bottom_right(),
+                                   st0: uv_rect.top_left,
+                                   st1: uv_rect.bottom_right,
+                                   color0: *color,
+                                   color1: *color,
+                                   kind: PrimitiveKind::Image,
+                                   rect_kind: RectangleKind::Solid,
+                                   rotation: rotation,
+                                   padding: 0,
+                               },
+                               clip,
+                               texture_item.is_opaque);
         }
     }
 

@@ -188,7 +188,7 @@ impl Renderer {
         let quad_program_id = ProgramId(0);// device.create_program("quad");
         let blend_program_id = ProgramId(0);//device.create_program("blend");
         let filter_program_id = ProgramId(0);//device.create_program("filter");
-        let box_shadow_program_id = ProgramId(0);//device.create_program("box_shadow");
+        let box_shadow_program_id = device.create_program("box_shadow", "shared_other");
         let blur_program_id = ProgramId(0);//device.create_program("blur");
         let max_raster_op_size = MAX_RASTER_OP_SIZE * options.device_pixel_ratio as u32;
         //let max_ubo_size = gl::get_integer_v(gl::MAX_UNIFORM_BLOCK_SIZE) as usize;
@@ -321,6 +321,7 @@ impl Renderer {
                                                  payload_tx_for_backend,
                                                  result_tx,
                                                  device_pixel_ratio,
+                                                 white_image_id,
                                                  texture_cache,
                                                  enable_aa,
                                                  backend_notifier,
