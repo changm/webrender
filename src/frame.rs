@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use app_units::Au;
-use euclid::{Rect, Point2D, Size2D, Matrix4};
+use euclid::{Rect, Point2D, Size2D, Matrix4D};
 use fnv::FnvHasher;
 use internal_types::{AxisDirection, LowLevelFilterOp, CompositionOp};
 use internal_types::{RendererFrame};
@@ -17,9 +17,9 @@ use std::hash::BuildHasherDefault;
 use std::mem;
 use util::{self, MatrixHelpers};
 use tiling::{Clip, FrameBuilder, FrameBuilderConfig};
-use webrender_traits::{AuxiliaryLists, PipelineId, Epoch, ScrollPolicy, ScrollLayerId};
-use webrender_traits::{StackingContext, FilterOp, ImageFormat, MixBlendMode};
-use webrender_traits::{ScrollEventPhase, ScrollLayerInfo, SpecificDisplayItem};
+use webrender_traits::{AuxiliaryLists, PipelineId, Epoch, ScrollLayerId};
+use webrender_traits::{StackingContext, FilterOp, MixBlendMode};
+use webrender_traits::{ScrollEventPhase, SpecificDisplayItem};
 
 /*
 #[cfg(target_os = "macos")]
@@ -49,8 +49,8 @@ struct FlattenInfo {
     //fixed_scroll_layer_id: ScrollLayerId,
     offset_from_origin: Point2D<f32>,
     offset_from_current_layer: Point2D<f32>,
-    transform: Matrix4,
-    perspective: Matrix4,
+    transform: Matrix4D<f32>,
+    perspective: Matrix4D<f32>,
     pipeline_id: PipelineId,
 }
 
@@ -193,7 +193,7 @@ impl StackingContextHelpers for StackingContext {
 }
 
 impl Frame {
-    pub fn new(config: FrameBuilderConfig) -> Frame {
+    pub fn new(_config: FrameBuilderConfig) -> Frame {
         Frame {
             pipeline_epoch_map: HashMap::with_hasher(Default::default()),
             pipeline_auxiliary_lists: HashMap::with_hasher(Default::default()),
@@ -422,8 +422,8 @@ impl Frame {
                         //actual_scroll_layer_id: root_scroll_layer_id,
                         //fixed_scroll_layer_id: root_fixed_layer_id,
                         current_clip_rect: MAX_RECT,
-                        transform: Matrix4::identity(),
-                        perspective: Matrix4::identity(),
+                        transform: Matrix4D::identity(),
+                        perspective: Matrix4D::identity(),
                         pipeline_id: root_pipeline_id,
                     };
 
@@ -432,7 +432,7 @@ impl Frame {
                                                                            self.scroll_offset.y as f32));
 
                     frame_builder.push_layer(root_stacking_context.stacking_context.bounds,
-                                             Matrix4::identity(),
+                                             Matrix4D::identity(),
                                              1.0);
 
                     let root_pipeline = SceneItemKind::Pipeline(root_pipeline);
@@ -576,7 +576,7 @@ impl Frame {
                     }
 
                     let origin = info.offset_from_current_layer + stacking_context.stacking_context.bounds.origin;
-                    let local_transform = Matrix4::identity().translate(origin.x, origin.y, 0.0)
+                    let local_transform = Matrix4D::identity().translate(origin.x, origin.y, 0.0)
                                                              .mul(&stacking_context.stacking_context.transform);
                                                              //.translate(-origin.x, -origin.y, 0.0);
 
@@ -584,7 +584,7 @@ impl Frame {
                                                     .mul(&local_transform);
 
                     // Build world space perspective transform
-                    //let perspective = Matrix4::identity().translate(origin.x, origin.y, 0.0)
+                    //let perspective = Matrix4D::identity().translate(origin.x, origin.y, 0.0)
                     //                                     .mul(&stacking_context.stacking_context.perspective)
                     //                                     .translate(-origin.x, -origin.y, 0.0);
 
@@ -704,7 +704,7 @@ impl Frame {
                 // Build world space transform
                 let origin = parent_info.offset_from_current_layer + stacking_context.bounds.origin;
 
-                let local_transform = Matrix4::identity().translate(origin.x, origin.y, 0.0)
+                let local_transform = Matrix4D::identity().translate(origin.x, origin.y, 0.0)
                                                          .mul(&stacking_context.transform);
                                                          //.translate(-origin.x, -origin.y, 0.0);
 
@@ -712,7 +712,7 @@ impl Frame {
                                                        .mul(&local_transform);
 
                 // Build world space perspective transform
-                let perspective = Matrix4::identity().translate(origin.x, origin.y, 0.0)
+                let perspective = Matrix4D::identity().translate(origin.x, origin.y, 0.0)
                                                      .mul(&stacking_context.perspective)
                                                      .translate(-origin.x, -origin.y, 0.0);
 
@@ -755,8 +755,8 @@ impl Frame {
                         info.default_scroll_layer_id = scroll_layer_id;
                         info.actual_scroll_layer_id = scroll_layer_id;
                         info.offset_from_current_layer = Point2D::zero();
-                        info.transform = Matrix4::identity();
-                        info.perspective = Matrix4::identity();
+                        info.transform = Matrix4D::identity();
+                        info.perspective = Matrix4D::identity();
                         info.current_clip_rect = Rect::new(Point2D::zero(),
                                                            stacking_context.overflow.size);
                         */
@@ -830,7 +830,7 @@ impl Frame {
 /*
     fn update_layer_transform(&mut self,
                               layer_id: ScrollLayerId,
-                              parent_transform: &Matrix4) {
+                              parent_transform: &Matrix4D) {
         // TODO(gw): This is an ugly borrow check workaround to clone these.
         //           Restructure this to avoid the clones!
         let (layer_transform, layer_children) = {
@@ -857,7 +857,7 @@ impl Frame {
 
     fn update_layer_transforms(&mut self) {
         if let Some(root_scroll_layer_id) = self.root_scroll_layer_id {
-            self.update_layer_transform(root_scroll_layer_id, &Matrix4::identity());
+            self.update_layer_transform(root_scroll_layer_id, &Matrix4D::identity());
         }
 
         // Update any fixed layers
@@ -872,7 +872,7 @@ impl Frame {
         }
 
         for layer_id in fixed_layers {
-            self.update_layer_transform(layer_id, &Matrix4::identity());
+            self.update_layer_transform(layer_id, &Matrix4D::identity());
         }
     }
 

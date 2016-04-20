@@ -5,7 +5,7 @@
 use app_units::Au;
 use batch::{VertexBufferId, TileParams};
 use device::{TextureId, TextureFilter};
-use euclid::{Matrix4, Point2D, Rect, Size2D};
+use euclid::{Matrix4D, Point2D, Rect, Size2D};
 use fnv::FnvHasher;
 use freelist::{FreeListItem, FreeListItemId};
 use num::Zero;
@@ -364,7 +364,7 @@ pub struct DrawCall {
 #[derive(Debug, Clone)]
 pub struct CompositeBatchJob {
     pub rect: Rect<f32>,
-    pub transform: Matrix4,
+    pub transform: Matrix4D<f32>,
     pub child_layer_index: ChildLayerIndex,
 }
 
@@ -422,8 +422,8 @@ pub struct RenderTargetId(pub usize);
 pub struct StackingContextInfo {
     pub offset_from_layer: Point2D<f32>,
     pub local_clip_rect: Rect<f32>,
-    pub transform: Matrix4,
-    pub perspective: Matrix4,
+    pub transform: Matrix4D<f32>,
+    pub perspective: Matrix4D<f32>,
 }
 
 #[derive(Debug)]

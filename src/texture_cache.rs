@@ -103,9 +103,11 @@ impl TexturePage {
         page
     }
 
+/*
     pub fn size(&self) -> u32 {
         self.texture_size
     }
+*/
 
     pub fn texture_id(&self) -> TextureId {
         self.texture_id
@@ -805,7 +807,7 @@ impl TextureCache {
     pub fn insert_raster_op(&mut self,
                             image_id: TextureCacheItemId,
                             item: &RasterItem,
-                            device_pixel_ratio: f32) {
+                            _device_pixel_ratio: f32) {
         let update_op = match item {
             &RasterItem::BoxShadow(ref op) => {
                 let allocation = self.allocate(image_id,

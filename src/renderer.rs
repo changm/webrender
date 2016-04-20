@@ -6,7 +6,7 @@ use batch::{RasterBatch};
 use debug_render::DebugRenderer;
 use device::{Device, ProgramId, TextureId, UniformLocation, VertexFormat, GpuProfile};
 use device::{TextureFilter, VAOId, VertexUsageHint, FileWatcherHandler};
-use euclid::{Rect, Matrix4, Point2D, Size2D};
+use euclid::{Rect, Matrix4D, Point2D, Size2D};
 use gleam::gl;
 use internal_types::{RendererFrame, ResultMsg, TextureUpdateOp};
 use internal_types::{TextureUpdateDetails, TextureUpdateList, PackedVertex, RenderTargetMode};
@@ -18,14 +18,12 @@ use ipc_channel::ipc;
 use profiler::{Profiler, BackendProfileCounters};
 use profiler::{RendererProfileTimers, RendererProfileCounters};
 use render_backend::RenderBackend;
-use std::cmp;
 use std::f32;
 use std::mem;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
-use std::usize;
 use texture_cache::{BorderType, TextureCache, TextureInsertOp};
 use tiling::{Frame, FrameBuilderConfig, PrimitiveShader, TextBuffer};
 use time::precise_time_ns;
@@ -161,7 +159,7 @@ pub struct Renderer {
     raster_op_target_a8: TextureId,
     raster_op_target_rgba8: TextureId,
     text_composite_target: TextureId,
-    tiling_render_targets: [TextureId; 2],
+    //tiling_render_targets: [TextureId; 2],
 
     gpu_profile_text: GpuProfile,
     gpu_profile_tiling: GpuProfile,
@@ -193,7 +191,7 @@ impl Renderer {
         let box_shadow_program_id = ProgramId(0);//device.create_program("box_shadow");
         let blur_program_id = ProgramId(0);//device.create_program("blur");
         let max_raster_op_size = MAX_RASTER_OP_SIZE * options.device_pixel_ratio as u32;
-        let max_ubo_size = gl::get_integer_v(gl::MAX_UNIFORM_BLOCK_SIZE) as usize;
+        //let max_ubo_size = gl::get_integer_v(gl::MAX_UNIFORM_BLOCK_SIZE) as usize;
         //println!("MAX_UBO_SIZE = {}", max_ubo_size);
 
         let text_program_id = device.create_program("text", "shared_other");
@@ -372,7 +370,7 @@ impl Renderer {
             raster_op_target_a8: raster_op_target_a8,
             raster_op_target_rgba8: raster_op_target_rgba8,
             text_composite_target: text_composite_target,
-            tiling_render_targets: [TextureId(0), TextureId(0)],
+            //tiling_render_targets: [TextureId(0), TextureId(0)],
             max_raster_op_size: max_raster_op_size,
             gpu_profile_text: GpuProfile::new(),
             gpu_profile_tiling: GpuProfile::new(),
@@ -871,12 +869,12 @@ impl Renderer {
             // Disable MSAA here for raster ops
             self.enable_msaa(false);
 
-            let projection = Matrix4::ortho(0.0,
-                                            self.max_raster_op_size as f32,
-                                            0.0,
-                                            self.max_raster_op_size as f32,
-                                            ORTHO_NEAR_PLANE,
-                                            ORTHO_FAR_PLANE);
+            let projection = Matrix4D::ortho(0.0,
+                                             self.max_raster_op_size as f32,
+                                             0.0,
+                                             self.max_raster_op_size as f32,
+                                             ORTHO_NEAR_PLANE,
+                                             ORTHO_FAR_PLANE);
 
             // All horizontal blurs must complete before anything else.
             let mut remaining_batches = vec![];
@@ -911,7 +909,7 @@ impl Renderer {
                                                 color_texture_id: TextureId,
                                                 program_id: ProgramId,
                                                 blur_direction: Option<AxisDirection>,
-                                                projection: &Matrix4) {
+                                                projection: &Matrix4D<f32>) {
         if !self.device.texture_has_alpha(target_texture_id) {
             gl::enable(gl::BLEND);
             gl::blend_func(gl::SRC_ALPHA, gl::ZERO);
@@ -1053,12 +1051,12 @@ impl Renderer {
         gl::clear_color(1.0, 1.0, 1.0, 0.0);
         gl::clear(gl::COLOR_BUFFER_BIT);
 
-        let projection = Matrix4::ortho(0.0,
-                                        TEXT_TARGET_SIZE as f32,
-                                        0.0,
-                                        TEXT_TARGET_SIZE as f32,
-                                        ORTHO_NEAR_PLANE,
-                                        ORTHO_FAR_PLANE);
+        let projection = Matrix4D::ortho(0.0,
+                                         TEXT_TARGET_SIZE as f32,
+                                         0.0,
+                                         TEXT_TARGET_SIZE as f32,
+                                         ORTHO_NEAR_PLANE,
+                                         ORTHO_FAR_PLANE);
 
         let (mut indices, mut vertices) = (vec![], vec![]);
 
@@ -1361,12 +1359,12 @@ impl Renderer {
             self.device.bind_render_target(None);
             gl::viewport(0, 0, framebuffer_size.width as i32, framebuffer_size.height as i32);
 
-            let projection = Matrix4::ortho(0.0,
-                                            pass.viewport_size.width as f32,
-                                            pass.viewport_size.height as f32,
-                                            0.0,
-                                            ORTHO_NEAR_PLANE,
-                                            ORTHO_FAR_PLANE);
+            let projection = Matrix4D::ortho(0.0,
+                                             pass.viewport_size.width as f32,
+                                             pass.viewport_size.height as f32,
+                                             0.0,
+                                             ORTHO_NEAR_PLANE,
+                                             ORTHO_FAR_PLANE);
 
             for batch in &pass.batches {
                 gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_LAYERS, layer_ubos[batch.layer_ubo_index]);

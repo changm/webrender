@@ -5,7 +5,7 @@
 use app_units::Au;
 use batch_builder::BorderSideHelpers;
 use device::{TextureId, TextureFilter};
-use euclid::{Point2D, Rect, Matrix4, Size2D, Point4D};
+use euclid::{Point2D, Rect, Matrix4D, Size2D, Point4D};
 use fnv::FnvHasher;
 use frame::FrameId;
 use internal_types::{AxisDirection, Glyph, GlyphKey};
@@ -13,8 +13,7 @@ use renderer::{BLUR_INFLATION_FACTOR, TEXT_TARGET_SIZE};
 use resource_cache::ResourceCache;
 use resource_list::ResourceList;
 use std::cmp;
-use std::collections::{HashMap, HashSet};
-use std::collections::hash_map::Entry::{Occupied, Vacant};
+use std::collections::HashMap;
 use std::mem;
 use std::hash::{Hash, BuildHasherDefault};
 use texture_cache::TexturePage;
@@ -170,11 +169,8 @@ impl<KEY: Eq + Hash + Copy, TYPE: Clone> Ubo<KEY, TYPE> {
 pub enum PrimitiveKind {
     Rectangle = 0,
     Image,
-    Gradient,
     Text,
     BorderCorner,
-
-    Invalid,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -206,8 +202,8 @@ struct LayerInstanceIndex(u32);
 
 #[derive(Clone, Debug)]
 pub struct PackedLayer {
-    transform: Matrix4,
-    inv_transform: Matrix4,
+    transform: Matrix4D<f32>,
+    inv_transform: Matrix4D<f32>,
     screen_vertices: [Point4D<f32>; 4],
 }
 
@@ -279,7 +275,7 @@ struct TransformedRect {
 }
 
 impl TransformedRect {
-    fn new(rect: &Rect<f32>, transform: &Matrix4) -> TransformedRect {
+    fn new(rect: &Rect<f32>, transform: &Matrix4D<f32>) -> TransformedRect {
         let vertices = [
             transform.transform_point4d(&Point4D::new(rect.origin.x,
                                                       rect.origin.y,
@@ -411,7 +407,7 @@ impl FrameBuilder {
 
     pub fn push_layer(&mut self,
                       rect: Rect<f32>,
-                      transform: Matrix4,
+                      transform: Matrix4D<f32>,
                       _: f32) {
         // TODO(gw): Not 3d transform correct!
         let scroll_transform = transform.translate(self.scroll_offset.x,
@@ -511,7 +507,7 @@ impl FrameBuilder {
             return
         }
 
-        if let Some(xf_rect) = self.should_add_prim(&rect) {
+        if let Some(..) = self.should_add_prim(&rect) {
             // Logic below to pick the primary render item depends on len > 0!
             assert!(src_glyphs.len() > 0);
             let mut glyph_key = GlyphKey::new(font_key, size, blur_radius, src_glyphs[0].index);
@@ -583,20 +579,20 @@ impl FrameBuilder {
     }
 
     pub fn add_box_shadow(&mut self,
-                          box_bounds: &Rect<f32>,
-                          box_offset: &Point2D<f32>,
-                          color: &ColorF,
-                          blur_radius: f32,
-                          spread_radius: f32,
-                          border_radius: f32,
-                          clip_mode: BoxShadowClipMode,
-                          resource_cache: &ResourceCache,
-                          frame_id: FrameId) {
+                          _box_bounds: &Rect<f32>,
+                          _box_offset: &Point2D<f32>,
+                          _color: &ColorF,
+                          _blur_radius: f32,
+                          _spread_radius: f32,
+                          _border_radius: f32,
+                          _clip_mode: BoxShadowClipMode,
+                          _resource_cache: &ResourceCache,
+                          _frame_id: FrameId) {
     }
 
     pub fn add_image(&mut self,
                      rect: Rect<f32>,
-                     stretch_size: &Size2D<f32>,
+                     _stretch_size: &Size2D<f32>,
                      image_key: ImageKey,
                      image_rendering: ImageRendering,
                      resource_cache: &mut ResourceCache,
@@ -1187,6 +1183,7 @@ pub struct ClipCorner {
     inner_radius_y: f32,
 }
 
+/*
 impl ClipCorner {
     pub fn invalid() -> ClipCorner {
         ClipCorner {
@@ -1199,6 +1196,7 @@ impl ClipCorner {
         }
     }
 }
+*/
 
 #[derive(Debug, Clone)]
 pub struct Clip {
@@ -1210,6 +1208,7 @@ pub struct Clip {
 }
 
 impl Clip {
+    /*
     pub fn invalid() -> Clip {
         Clip {
             rect: Rect::zero(),
@@ -1219,6 +1218,7 @@ impl Clip {
             bottom_right: ClipCorner::invalid(),
         }
     }
+*/
 
     pub fn from_clip_region(clip: &ComplexClipRegion) -> Clip {
         Clip {
