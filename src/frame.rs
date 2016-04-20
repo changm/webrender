@@ -518,7 +518,7 @@ impl Frame {
                                                  context.device_pixel_ratio);
                             }
                             SpecificDisplayItem::Rectangle(ref info) => {
-                                builder.add_solid_rectangle(item.rect, info.color, clip);
+                                builder.add_solid_rectangle(&item.rect, &info.color, clip);
                             }
                             SpecificDisplayItem::Gradient(ref info) => {
                                 builder.add_gradient(item.rect,

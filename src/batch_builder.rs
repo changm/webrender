@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use euclid::{Point2D, Rect};
 use std::f32;
 use webrender_traits::{ColorF, BorderStyle};
 use webrender_traits::{BorderSide};
@@ -42,22 +43,21 @@ impl BorderSideHelpers for BorderSide {
     }
 }
 
-/*
 #[derive(Debug)]
-struct BoxShadowMetrics {
-    edge_size: f32,
-    tl_outer: Point2D<f32>,
-    tl_inner: Point2D<f32>,
-    tr_outer: Point2D<f32>,
-    tr_inner: Point2D<f32>,
-    bl_outer: Point2D<f32>,
-    bl_inner: Point2D<f32>,
-    br_outer: Point2D<f32>,
-    br_inner: Point2D<f32>,
+pub struct BoxShadowMetrics {
+    pub edge_size: f32,
+    pub tl_outer: Point2D<f32>,
+    pub tl_inner: Point2D<f32>,
+    pub tr_outer: Point2D<f32>,
+    pub tr_inner: Point2D<f32>,
+    pub bl_outer: Point2D<f32>,
+    pub bl_inner: Point2D<f32>,
+    pub br_outer: Point2D<f32>,
+    pub br_inner: Point2D<f32>,
 }
 
 impl BoxShadowMetrics {
-    fn new(box_bounds: &Rect<f32>, border_radius: f32, blur_radius: f32) -> BoxShadowMetrics {
+    pub fn new(box_bounds: &Rect<f32>, border_radius: f32, blur_radius: f32) -> BoxShadowMetrics {
         let outside_edge_size = 3.0 * blur_radius;
         let inside_edge_size = outside_edge_size.max(border_radius);
         let edge_size = outside_edge_size + inside_edge_size;
@@ -77,4 +77,3 @@ impl BoxShadowMetrics {
         }
     }
 }
-*/

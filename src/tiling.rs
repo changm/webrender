@@ -3,12 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use app_units::Au;
-use batch_builder::BorderSideHelpers;
+use batch_builder::{BorderSideHelpers, BoxShadowMetrics};
 use device::{TextureId, TextureFilter};
 use euclid::{Point2D, Rect, Matrix4D, Size2D, Point4D};
 use fnv::FnvHasher;
 use frame::FrameId;
-use internal_types::{AxisDirection, Glyph, GlyphKey};
+use internal_types::{AxisDirection, BoxShadowRasterOp, Glyph, GlyphKey, RasterItem};
 use renderer::{BLUR_INFLATION_FACTOR, TEXT_TARGET_SIZE};
 use resource_cache::ResourceCache;
 use resource_list::ResourceList;
@@ -25,6 +25,16 @@ use webrender_traits::{BoxShadowClipMode, GradientStop};
 const MAX_PRIMITIVES_PER_PASS: usize = 4;
 const INVALID_PRIM_INDEX: u32 = 0xffffffff;
 const INVALID_CLIP_INDEX: u32 = 0xffffffff;
+
+fn compute_box_shadow_rect(box_bounds: &Rect<f32>,
+                               box_offset: &Point2D<f32>,
+                               spread_radius: f32)
+                               -> Rect<f32> {
+    let mut rect = (*box_bounds).clone();
+    rect.origin.x += box_offset.x;
+    rect.origin.y += box_offset.y;
+    rect.inflate(spread_radius, spread_radius)
+}
 
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -578,16 +588,420 @@ impl FrameBuilder {
         }
     }
 
+    // FIXME(pcwalton): Assumes rectangles are well-formed with origin in TL
+    fn add_box_shadow_corner(&mut self,
+                             top_left: &Point2D<f32>,
+                             bottom_right: &Point2D<f32>,
+                             corner_area_top_left: &Point2D<f32>,
+                             corner_area_bottom_right: &Point2D<f32>,
+                             box_rect: &Rect<f32>,
+                             color: &ColorF,
+                             blur_radius: f32,
+                             border_radius: f32,
+                             clip_mode: BoxShadowClipMode,
+                             resource_cache: &ResourceCache,
+                             frame_id: FrameId,
+                             /*rotation_angle: BasicRotationAngle*/) {
+        let corner_area_rect =
+            Rect::new(*corner_area_top_left,
+                      Size2D::new(corner_area_bottom_right.x - corner_area_top_left.x,
+                                  corner_area_bottom_right.y - corner_area_top_left.y));
+
+        println!("todo - box shadow corner");
+        /*
+        self.push_clip_in_rect(&corner_area_rect);
+
+        let inverted = match clip_mode {
+            BoxShadowClipMode::Outset | BoxShadowClipMode::None => false,
+            BoxShadowClipMode::Inset => true,
+        };
+
+        let color_image = match BoxShadowRasterOp::create_corner(blur_radius,
+                                                                 border_radius,
+                                                                 box_rect,
+                                                                 inverted,
+                                                                 self.device_pixel_ratio) {
+            Some(raster_item) => {
+                let raster_item = RasterItem::BoxShadow(raster_item);
+                resource_cache.get_raster(&raster_item, frame_id)
+            }
+            None => resource_cache.get_dummy_color_image(),
+        };
+
+        self.add_color_image_rectangle(top_left,
+                                       bottom_right,
+                                       color,
+                                       color,
+                                       &color_image,
+                                       resource_cache,
+                                       rotation_angle);
+
+        //self.pop_clip_in_rect();
+        */
+    }
+
+    fn add_box_shadow_edge(&mut self,
+                           top_left: &Point2D<f32>,
+                           bottom_right: &Point2D<f32>,
+                           box_rect: &Rect<f32>,
+                           color: &ColorF,
+                           blur_radius: f32,
+                           border_radius: f32,
+                           clip_mode: BoxShadowClipMode,
+                           resource_cache: &ResourceCache,
+                           frame_id: FrameId,
+                           /*rotation_angle: BasicRotationAngle*/) {
+        if top_left.x >= bottom_right.x || top_left.y >= bottom_right.y {
+            return
+        }
+
+        println!("todo - box shadow edge");
+        /*
+        let inverted = match clip_mode {
+            BoxShadowClipMode::Outset | BoxShadowClipMode::None => false,
+            BoxShadowClipMode::Inset => true,
+        };
+
+        let color_image = match BoxShadowRasterOp::create_edge(blur_radius,
+                                                               border_radius,
+                                                               box_rect,
+                                                               inverted,
+                                                               self.device_pixel_ratio) {
+            Some(raster_item) => {
+                let raster_item = RasterItem::BoxShadow(raster_item);
+                resource_cache.get_raster(&raster_item, frame_id)
+            }
+            None => resource_cache.get_dummy_color_image(),
+        };
+
+        self.add_color_image_rectangle(top_left,
+                                       bottom_right,
+                                       color,
+                                       color,
+                                       &color_image,
+                                       resource_cache,
+                                       rotation_angle)*/
+    }
+
+    fn add_box_shadow_sides(&mut self,
+                            box_bounds: &Rect<f32>,
+                            box_offset: &Point2D<f32>,
+                            color: &ColorF,
+                            blur_radius: f32,
+                            spread_radius: f32,
+                            border_radius: f32,
+                            clip_mode: BoxShadowClipMode,
+                            resource_cache: &ResourceCache,
+                            frame_id: FrameId) {
+        let rect = compute_box_shadow_rect(box_bounds, box_offset, spread_radius);
+        let metrics = BoxShadowMetrics::new(&rect, border_radius, blur_radius);
+
+        //let clip_state = self.adjust_clip_for_box_shadow_clip_mode(box_bounds,
+        //                                                           border_radius,
+        //                                                           clip_mode);
+
+        // Draw the sides.
+        //
+        //      +--+------------------+--+
+        //      |  |##################|  |
+        //      +--+------------------+--+
+        //      |##|                  |##|
+        //      |##|                  |##|
+        //      |##|                  |##|
+        //      +--+------------------+--+
+        //      |  |##################|  |
+        //      +--+------------------+--+
+
+        let horizontal_size = Size2D::new(metrics.br_inner.x - metrics.tl_inner.x,
+                                          metrics.edge_size);
+        let vertical_size = Size2D::new(metrics.edge_size,
+                                        metrics.br_inner.y - metrics.tl_inner.y);
+        let top_rect = Rect::new(metrics.tl_outer + Point2D::new(metrics.edge_size, 0.0),
+                                 horizontal_size);
+        let right_rect =
+            Rect::new(metrics.tr_outer + Point2D::new(-metrics.edge_size, metrics.edge_size),
+                      vertical_size);
+        let bottom_rect =
+            Rect::new(metrics.bl_outer + Point2D::new(metrics.edge_size, -metrics.edge_size),
+                      horizontal_size);
+        let left_rect = Rect::new(metrics.tl_outer + Point2D::new(0.0, metrics.edge_size),
+                                  vertical_size);
+
+        self.add_box_shadow_edge(&top_rect.origin,
+                                 &top_rect.bottom_right(),
+                                 &rect,
+                                 color,
+                                 blur_radius,
+                                 border_radius,
+                                 clip_mode,
+                                 resource_cache,
+                                 frame_id,
+                                 /*BasicRotationAngle::Clockwise90*/);
+        self.add_box_shadow_edge(&right_rect.origin,
+                                 &right_rect.bottom_right(),
+                                 &rect,
+                                 color,
+                                 blur_radius,
+                                 border_radius,
+                                 clip_mode,
+                                 resource_cache,
+                                 frame_id,
+                                 /*BasicRotationAngle::Clockwise180*/);
+        self.add_box_shadow_edge(&bottom_rect.origin,
+                                 &bottom_rect.bottom_right(),
+                                 &rect,
+                                 color,
+                                 blur_radius,
+                                 border_radius,
+                                 clip_mode,
+                                 resource_cache,
+                                 frame_id,
+                                 /*BasicRotationAngle::Clockwise270*/);
+        self.add_box_shadow_edge(&left_rect.origin,
+                                 &left_rect.bottom_right(),
+                                 &rect,
+                                 color,
+                                 blur_radius,
+                                 border_radius,
+                                 clip_mode,
+                                 resource_cache,
+                                 frame_id,
+                                 /*BasicRotationAngle::Upright*/);
+
+        //self.undo_clip_state(clip_state);
+    }
+
+    fn add_box_shadow_corners(&mut self,
+                              box_bounds: &Rect<f32>,
+                              box_offset: &Point2D<f32>,
+                              color: &ColorF,
+                              blur_radius: f32,
+                              spread_radius: f32,
+                              border_radius: f32,
+                              clip_mode: BoxShadowClipMode,
+                              resource_cache: &ResourceCache,
+                              frame_id: FrameId) {
+        // Draw the corners.
+        //
+        //      +--+------------------+--+
+        //      |##|                  |##|
+        //      +--+------------------+--+
+        //      |  |                  |  |
+        //      |  |                  |  |
+        //      |  |                  |  |
+        //      +--+------------------+--+
+        //      |##|                  |##|
+        //      +--+------------------+--+
+
+        let rect = compute_box_shadow_rect(box_bounds, box_offset, spread_radius);
+        let metrics = BoxShadowMetrics::new(&rect, border_radius, blur_radius);
+
+        //let clip_state = self.adjust_clip_for_box_shadow_clip_mode(box_bounds,
+        //                                                           border_radius,
+        //                                                           clip_mode);
+
+        // Prevent overlap of the box shadow corners when the size of the blur is larger than the
+        // size of the box.
+        let center = Point2D::new(box_bounds.origin.x + box_bounds.size.width / 2.0,
+                                  box_bounds.origin.y + box_bounds.size.height / 2.0);
+
+        self.add_box_shadow_corner(&metrics.tl_outer,
+                                   &Point2D::new(metrics.tl_outer.x + metrics.edge_size,
+                                                 metrics.tl_outer.y + metrics.edge_size),
+                                   &metrics.tl_outer,
+                                   &center,
+                                   &rect,
+                                   &color,
+                                   blur_radius,
+                                   border_radius,
+                                   clip_mode,
+                                   resource_cache,
+                                   frame_id,
+                                   /*BasicRotationAngle::Upright*/);
+        self.add_box_shadow_corner(&Point2D::new(metrics.tr_outer.x - metrics.edge_size,
+                                                 metrics.tr_outer.y),
+                                   &Point2D::new(metrics.tr_outer.x,
+                                                 metrics.tr_outer.y + metrics.edge_size),
+                                   &Point2D::new(center.x, metrics.tr_outer.y),
+                                   &Point2D::new(metrics.tr_outer.x, center.y),
+                                   &rect,
+                                   &color,
+                                   blur_radius,
+                                   border_radius,
+                                   clip_mode,
+                                   resource_cache,
+                                   frame_id,
+                                   /*BasicRotationAngle::Clockwise90*/);
+        self.add_box_shadow_corner(&Point2D::new(metrics.br_outer.x - metrics.edge_size,
+                                                 metrics.br_outer.y - metrics.edge_size),
+                                   &Point2D::new(metrics.br_outer.x, metrics.br_outer.y),
+                                   &center,
+                                   &metrics.br_outer,
+                                   &rect,
+                                   &color,
+                                   blur_radius,
+                                   border_radius,
+                                   clip_mode,
+                                   resource_cache,
+                                   frame_id,
+                                   /*BasicRotationAngle::Clockwise180*/);
+        self.add_box_shadow_corner(&Point2D::new(metrics.bl_outer.x,
+                                                 metrics.bl_outer.y - metrics.edge_size),
+                                   &Point2D::new(metrics.bl_outer.x + metrics.edge_size,
+                                                 metrics.bl_outer.y),
+                                   &Point2D::new(metrics.bl_outer.x, center.y),
+                                   &Point2D::new(center.x, metrics.bl_outer.y),
+                                   &rect,
+                                   &color,
+                                   blur_radius,
+                                   border_radius,
+                                   clip_mode,
+                                   resource_cache,
+                                   frame_id,
+                                   /*BasicRotationAngle::Clockwise270*/);
+
+        //self.undo_clip_state(clip_state);
+    }
+
+    fn fill_outside_area_of_inset_box_shadow(&mut self,
+                                             box_bounds: &Rect<f32>,
+                                             box_offset: &Point2D<f32>,
+                                             color: &ColorF,
+                                             blur_radius: f32,
+                                             spread_radius: f32,
+                                             border_radius: f32,
+                                             resource_cache: &ResourceCache,
+                                             frame_id: FrameId) {
+        let rect = compute_box_shadow_rect(box_bounds, box_offset, spread_radius);
+        let metrics = BoxShadowMetrics::new(&rect, border_radius, blur_radius);
+
+        //let clip_state = self.adjust_clip_for_box_shadow_clip_mode(box_bounds,
+        //                                                           border_radius,
+        //                                                           BoxShadowClipMode::Inset);
+
+        // Fill in the outside area of the box.
+        //
+        //            +------------------------------+
+        //      A --> |##############################|
+        //            +--+--+------------------+--+--+
+        //            |##|  |                  |  |##|
+        //            |##+--+------------------+--+##|
+        //            |##|  |                  |  |##|
+        //      D --> |##|  |                  |  |##| <-- B
+        //            |##|  |                  |  |##|
+        //            |##+--+------------------+--+##|
+        //            |##|  |                  |  |##|
+        //            +--+--+------------------+--+--+
+        //      C --> |##############################|
+        //            +------------------------------+
+
+        // A:
+        self.add_solid_rectangle(&Rect::new(box_bounds.origin,
+                                            Size2D::new(box_bounds.size.width,
+                                                        metrics.tl_outer.y - box_bounds.origin.y)),
+                                 color,
+                                 None);
+
+        // B:
+        self.add_solid_rectangle(&Rect::new(metrics.tr_outer,
+                                            Size2D::new(box_bounds.max_x() - metrics.tr_outer.x,
+                                                        metrics.br_outer.y - metrics.tr_outer.y)),
+                                 color,
+                                 None);
+
+        // C:
+        self.add_solid_rectangle(&Rect::new(Point2D::new(box_bounds.origin.x, metrics.bl_outer.y),
+                                            Size2D::new(box_bounds.size.width,
+                                                        box_bounds.max_y() - metrics.br_outer.y)),
+                                 color,
+                                 None);
+
+        // D:
+        self.add_solid_rectangle(&Rect::new(Point2D::new(box_bounds.origin.x, metrics.tl_outer.y),
+                                            Size2D::new(metrics.tl_outer.x - box_bounds.origin.x,
+                                                        metrics.bl_outer.y - metrics.tl_outer.y)),
+                                 color,
+                                 None);
+
+        //self.undo_clip_state(clip_state);
+    }
+
     pub fn add_box_shadow(&mut self,
-                          _box_bounds: &Rect<f32>,
-                          _box_offset: &Point2D<f32>,
-                          _color: &ColorF,
-                          _blur_radius: f32,
-                          _spread_radius: f32,
-                          _border_radius: f32,
-                          _clip_mode: BoxShadowClipMode,
-                          _resource_cache: &ResourceCache,
-                          _frame_id: FrameId) {
+                          box_bounds: &Rect<f32>,
+                          box_offset: &Point2D<f32>,
+                          color: &ColorF,
+                          blur_radius: f32,
+                          spread_radius: f32,
+                          border_radius: f32,
+                          clip_mode: BoxShadowClipMode,
+                          resource_cache: &ResourceCache,
+                          frame_id: FrameId) {
+        let rect = compute_box_shadow_rect(box_bounds, box_offset, spread_radius);
+
+        // Fast path.
+        if blur_radius == 0.0 && spread_radius == 0.0 && clip_mode == BoxShadowClipMode::None {
+            self.add_solid_rectangle(&rect, color, None);
+            return;
+        }
+
+        // Draw the corners.
+        self.add_box_shadow_corners(box_bounds,
+                                    box_offset,
+                                    color,
+                                    blur_radius,
+                                    spread_radius,
+                                    border_radius,
+                                    clip_mode,
+                                    resource_cache,
+                                    frame_id);
+
+        // Draw the sides.
+        self.add_box_shadow_sides(box_bounds,
+                                  box_offset,
+                                  color,
+                                  blur_radius,
+                                  spread_radius,
+                                  border_radius,
+                                  clip_mode,
+                                  resource_cache,
+                                  frame_id);
+
+        match clip_mode {
+            BoxShadowClipMode::None => {
+                // Fill the center area.
+                self.add_solid_rectangle(box_bounds, color, None);
+            }
+            BoxShadowClipMode::Outset => {
+                // Fill the center area.
+                let metrics = BoxShadowMetrics::new(&rect, border_radius, blur_radius);
+                if metrics.br_inner.x > metrics.tl_inner.x &&
+                        metrics.br_inner.y > metrics.tl_inner.y {
+                    let center_rect =
+                        Rect::new(metrics.tl_inner,
+                                  Size2D::new(metrics.br_inner.x - metrics.tl_inner.x,
+                                              metrics.br_inner.y - metrics.tl_inner.y));
+
+                    // FIXME(pcwalton): This assumes the border radius is zero. That is not always
+                    // the case!
+                    //let old_clip_out_rect = self.set_clip_out_rect(Some(*box_bounds));
+
+                    self.add_solid_rectangle(&center_rect, color, None);
+
+                    //self.set_clip_out_rect(old_clip_out_rect);
+                }
+            }
+            BoxShadowClipMode::Inset => {
+                // Fill in the outsides.
+                self.fill_outside_area_of_inset_box_shadow(box_bounds,
+                                                           box_offset,
+                                                           color,
+                                                           blur_radius,
+                                                           spread_radius,
+                                                           border_radius,
+                                                           resource_cache,
+                                                           frame_id);
+            }
+        }
     }
 
     pub fn add_image(&mut self,
@@ -629,8 +1043,8 @@ impl FrameBuilder {
     }
 
     pub fn add_solid_rectangle(&mut self,
-                               rect: Rect<f32>,
-                               color: ColorF,
+                               rect: &Rect<f32>,
+                               color: &ColorF,
                                clip: Option<Clip>) {
         if color.a == 0.0 {
             return;
@@ -644,8 +1058,8 @@ impl FrameBuilder {
                                    p1: rect.bottom_right(),
                                    st0: Point2D::zero(),
                                    st1: Point2D::zero(),
-                                   color0: color,
-                                   color1: color,
+                                   color0: *color,
+                                   color1: *color,
                                    kind: PrimitiveKind::Rectangle,
                                    rect_kind: RectangleKind::Solid,
                                    rotation: RotationKind::Angle0,
@@ -755,24 +1169,24 @@ impl FrameBuilder {
         let bottom_color = bottom.border_color(2.0/3.0, 1.0, 0.7, 0.3);
 
         // Edges
-        self.add_solid_rectangle(Rect::new(Point2D::new(tl_outer.x, tl_inner.y),
+        self.add_solid_rectangle(&Rect::new(Point2D::new(tl_outer.x, tl_inner.y),
                                            Size2D::new(left.width, bl_inner.y - tl_inner.y)),
-                                 left_color,
+                                 &left_color,
                                  None);
 
-        self.add_solid_rectangle(Rect::new(Point2D::new(tl_inner.x, tl_outer.y),
+        self.add_solid_rectangle(&Rect::new(Point2D::new(tl_inner.x, tl_outer.y),
                                            Size2D::new(tr_inner.x - tl_inner.x, tr_outer.y + top.width - tl_outer.y)),
-                                 top_color,
+                                 &top_color,
                                  None);
 
-        self.add_solid_rectangle(Rect::new(Point2D::new(br_outer.x - right.width, tr_inner.y),
+        self.add_solid_rectangle(&Rect::new(Point2D::new(br_outer.x - right.width, tr_inner.y),
                                            Size2D::new(right.width, br_inner.y - tr_inner.y)),
-                                 right_color,
+                                 &right_color,
                                  None);
 
-        self.add_solid_rectangle(Rect::new(Point2D::new(bl_inner.x, bl_outer.y - bottom.width),
+        self.add_solid_rectangle(&Rect::new(Point2D::new(bl_inner.x, bl_outer.y - bottom.width),
                                            Size2D::new(br_inner.x - bl_inner.x, br_outer.y - bl_outer.y + bottom.width)),
-                           bottom_color,
+                                 &bottom_color,
                                  None);
 
         // Corners
