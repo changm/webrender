@@ -1285,6 +1285,14 @@ impl Device {
         let mut include = String::new();
         f.read_to_string(&mut include).unwrap();
 
+        let mut shared_path = self.resource_path.clone();
+        shared_path.push(&format!("{}.glsl", base_filename));
+        if let Ok(mut f) = File::open(&shared_path) {
+            let mut shared_code = String::new();
+            f.read_to_string(&mut shared_code).unwrap();
+            include.push_str(&shared_code);
+        }
+
         let program = Program {
             id: pid,
             u_transform: -1,

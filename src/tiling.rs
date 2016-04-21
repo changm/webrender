@@ -26,6 +26,22 @@ const MAX_PRIMITIVES_PER_PASS: usize = 4;
 const INVALID_PRIM_INDEX: u32 = 0xffffffff;
 const INVALID_CLIP_INDEX: u32 = 0xffffffff;
 
+fn clip_for_box_shadow_clip_mode(box_bounds: &Rect<f32>,
+                                 border_radius: f32,
+                                 clip_mode: BoxShadowClipMode) -> (Option<Clip>, Option<Clip>) {
+    match clip_mode {
+        BoxShadowClipMode::None => {
+            (None, None)
+        }
+        BoxShadowClipMode::Inset => {
+            (Some(Clip::from_rect(box_bounds)), None)
+        }
+        BoxShadowClipMode::Outset => {
+            (None, Some(Clip::from_rect(box_bounds)))
+        }
+    }
+}
+
 fn compute_box_shadow_rect(box_bounds: &Rect<f32>,
                                box_offset: &Point2D<f32>,
                                spread_radius: f32)
@@ -118,14 +134,36 @@ impl TextBuffer {
     }
 }
 
+#[allow(non_camel_case_types)]
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum PrimitiveShader {
-    OpaqueRectangle,
-    OpaqueRectangleClip,
-    OpaqueImage,
-    OpaqueRectangleText,
+    // Rect primary
+    Rect,
+    Rect_Clip,
+
+    // Image primary
+    Image,
+
+    // Text primary
+    Text,
+
+    // Border corner primary
+    BorderCorner,
+    BorderCorner_Clip,
+
+    // Box shadow primary
+    BoxShadow,
+
+    // Special fast paths
+    Text_Rect,
+    Image_Rect,
+
+    // Generic paths
+    // TODO(gw): Investigate how to handle these - perhaps still have a primary element?
     Generic2,
     Generic4,
+
+    // Error
     Error,
 }
 
@@ -181,6 +219,7 @@ pub enum PrimitiveKind {
     Image,
     Text,
     BorderCorner,
+    BoxShadow,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -240,7 +279,8 @@ struct Primitive {
     packed: PackedPrimitive,
     intersecting_prims_behind: Vec<PrimitiveIndex>,
     intersecting_prims_in_front: Vec<PrimitiveIndex>,
-    clip: Option<Clip>,
+    clip_in: Option<Clip>,
+    clip_out: Option<Clip>,
 }
 
 // TODO (gw): Profile and create a smaller layout for simple passes if worthwhile...
@@ -271,10 +311,11 @@ impl PackedDrawCommand {
 #[derive(Debug)]
 struct RenderPrimitive {
     layer_index_in_ubo: u32,
-    clip_index_in_ubo: Option<u32>,
+    clip_in_index_in_ubo: Option<u32>,
+    clip_out_index_in_ubo: Option<u32>,
     key: PrimitiveKey,
     shader: PrimitiveShader,
-    other_primitives: Vec<(PrimitiveIndex, LayerTemplateIndex)>,
+    other_primitives: [(PrimitiveIndex, LayerTemplateIndex); MAX_PRIMITIVES_PER_PASS-1],
 }
 
 #[derive(Debug)]
@@ -586,6 +627,7 @@ impl FrameBuilder {
                                        padding: 0,
                                     },
                                     None,
+                                    None,
                                     false);
             }
         }
@@ -604,39 +646,44 @@ impl FrameBuilder {
                              clip_mode: BoxShadowClipMode,
                              resource_cache: &ResourceCache,
                              frame_id: FrameId,
-                             rotation_angle: RotationKind) {
+                             rotation_angle: RotationKind,
+                             clip_in: Option<Clip>,
+                             clip_out: Option<Clip>) {
         let corner_area_rect =
             Rect::new(*corner_area_top_left,
                       Size2D::new(corner_area_bottom_right.x - corner_area_top_left.x,
                                   corner_area_bottom_right.y - corner_area_top_left.y));
 
-        //self.push_clip_in_rect(&corner_area_rect);
+        let rect = Rect::new(*top_left, Size2D::new(bottom_right.x - top_left.x,
+                                                    bottom_right.y - top_left.y));
 
-        let inverted = match clip_mode {
-            BoxShadowClipMode::Outset | BoxShadowClipMode::None => false,
-            BoxShadowClipMode::Inset => true,
-        };
+        if rect.size.width > 0.0 && rect.size.height > 0.0 {
+            let clip_in = Some(Clip::from_rect(&corner_area_rect));
 
-        let color_image = match BoxShadowRasterOp::create_corner(blur_radius,
-                                                                 border_radius,
-                                                                 box_rect,
-                                                                 inverted,
-                                                                 self.device_pixel_ratio) {
-            Some(raster_item) => {
-                let raster_item = RasterItem::BoxShadow(raster_item);
-                resource_cache.get_raster(&raster_item, frame_id)
-            }
-            None => resource_cache.get_dummy_color_image(),
-        };
+            let inverted = match clip_mode {
+                BoxShadowClipMode::Outset | BoxShadowClipMode::None => false,
+                BoxShadowClipMode::Inset => true,
+            };
 
-        self.add_texture_rect(&Rect::new(*top_left, Size2D::new(bottom_right.x - top_left.x,
-                                                                bottom_right.y - top_left.y)),
-                              color,
-                              &color_image,
-                              rotation_angle,
-                              None);
+            let color_image = match BoxShadowRasterOp::create_corner(blur_radius,
+                                                                     border_radius,
+                                                                     box_rect,
+                                                                     inverted,
+                                                                     self.device_pixel_ratio) {
+                Some(raster_item) => {
+                    let raster_item = RasterItem::BoxShadow(raster_item);
+                    resource_cache.get_raster(&raster_item, frame_id)
+                }
+                None => resource_cache.get_dummy_color_image(),
+            };
 
-        //self.pop_clip_in_rect();
+            self.add_box_shadow_rect(&rect,
+                                     color,
+                                     &color_image,
+                                     rotation_angle,
+                                     clip_in,
+                                     clip_out);
+        }
     }
 
     fn add_box_shadow_edge(&mut self,
@@ -649,34 +696,41 @@ impl FrameBuilder {
                            clip_mode: BoxShadowClipMode,
                            resource_cache: &ResourceCache,
                            frame_id: FrameId,
-                           rotation_angle: RotationKind) {
+                           rotation_angle: RotationKind,
+                           clip_in: Option<Clip>,
+                           clip_out: Option<Clip>) {
         if top_left.x >= bottom_right.x || top_left.y >= bottom_right.y {
             return
         }
 
-        let inverted = match clip_mode {
-            BoxShadowClipMode::Outset | BoxShadowClipMode::None => false,
-            BoxShadowClipMode::Inset => true,
-        };
+        let rect = Rect::new(*top_left, Size2D::new(bottom_right.x - top_left.x,
+                                                    bottom_right.y - top_left.y));
 
-        let color_image = match BoxShadowRasterOp::create_edge(blur_radius,
-                                                               border_radius,
-                                                               box_rect,
-                                                               inverted,
-                                                               self.device_pixel_ratio) {
-            Some(raster_item) => {
-                let raster_item = RasterItem::BoxShadow(raster_item);
-                resource_cache.get_raster(&raster_item, frame_id)
-            }
-            None => resource_cache.get_dummy_color_image(),
-        };
+        if rect.size.width > 0.0 && rect.size.height > 0.0 {
+            let inverted = match clip_mode {
+                BoxShadowClipMode::Outset | BoxShadowClipMode::None => false,
+                BoxShadowClipMode::Inset => true,
+            };
 
-        self.add_texture_rect(&Rect::new(*top_left, Size2D::new(bottom_right.x - top_left.x,
-                                                                bottom_right.y - top_left.y)),
-                              color,
-                              &color_image,
-                              rotation_angle,
-                              None)
+            let color_image = match BoxShadowRasterOp::create_edge(blur_radius,
+                                                                   border_radius,
+                                                                   box_rect,
+                                                                   inverted,
+                                                                   self.device_pixel_ratio) {
+                Some(raster_item) => {
+                    let raster_item = RasterItem::BoxShadow(raster_item);
+                    resource_cache.get_raster(&raster_item, frame_id)
+                }
+                None => resource_cache.get_dummy_color_image(),
+            };
+
+            self.add_box_shadow_rect(&rect,
+                                     color,
+                                     &color_image,
+                                     rotation_angle,
+                                     clip_in,
+                                     clip_out)
+        }
     }
 
     fn add_box_shadow_sides(&mut self,
@@ -692,9 +746,9 @@ impl FrameBuilder {
         let rect = compute_box_shadow_rect(box_bounds, box_offset, spread_radius);
         let metrics = BoxShadowMetrics::new(&rect, border_radius, blur_radius);
 
-        //let clip_state = self.adjust_clip_for_box_shadow_clip_mode(box_bounds,
-        //                                                           border_radius,
-        //                                                           clip_mode);
+        let (clip_in, clip_out) = clip_for_box_shadow_clip_mode(box_bounds,
+                                                                border_radius,
+                                                                clip_mode);
 
         // Draw the sides.
         //
@@ -732,7 +786,9 @@ impl FrameBuilder {
                                  clip_mode,
                                  resource_cache,
                                  frame_id,
-                                 RotationKind::Angle90);
+                                 RotationKind::Angle90,
+                                 clip_in.clone(),
+                                 clip_out.clone());
         self.add_box_shadow_edge(&right_rect.origin,
                                  &right_rect.bottom_right(),
                                  &rect,
@@ -742,7 +798,9 @@ impl FrameBuilder {
                                  clip_mode,
                                  resource_cache,
                                  frame_id,
-                                 RotationKind::Angle180);
+                                 RotationKind::Angle180,
+                                 clip_in.clone(),
+                                 clip_out.clone());
         self.add_box_shadow_edge(&bottom_rect.origin,
                                  &bottom_rect.bottom_right(),
                                  &rect,
@@ -752,7 +810,9 @@ impl FrameBuilder {
                                  clip_mode,
                                  resource_cache,
                                  frame_id,
-                                 RotationKind::Angle270);
+                                 RotationKind::Angle270,
+                                 clip_in.clone(),
+                                 clip_out.clone());
         self.add_box_shadow_edge(&left_rect.origin,
                                  &left_rect.bottom_right(),
                                  &rect,
@@ -762,9 +822,9 @@ impl FrameBuilder {
                                  clip_mode,
                                  resource_cache,
                                  frame_id,
-                                 RotationKind::Angle0);
-
-        //self.undo_clip_state(clip_state);
+                                 RotationKind::Angle0,
+                                 clip_in,
+                                 clip_out);
     }
 
     fn add_box_shadow_corners(&mut self,
@@ -792,9 +852,9 @@ impl FrameBuilder {
         let rect = compute_box_shadow_rect(box_bounds, box_offset, spread_radius);
         let metrics = BoxShadowMetrics::new(&rect, border_radius, blur_radius);
 
-        //let clip_state = self.adjust_clip_for_box_shadow_clip_mode(box_bounds,
-        //                                                           border_radius,
-        //                                                           clip_mode);
+        let (clip_in, clip_out) = clip_for_box_shadow_clip_mode(box_bounds,
+                                                                border_radius,
+                                                                clip_mode);
 
         // Prevent overlap of the box shadow corners when the size of the blur is larger than the
         // size of the box.
@@ -813,7 +873,9 @@ impl FrameBuilder {
                                    clip_mode,
                                    resource_cache,
                                    frame_id,
-                                   RotationKind::Angle0);
+                                   RotationKind::Angle0,
+                                   clip_in.clone(),
+                                   clip_out.clone());
         self.add_box_shadow_corner(&Point2D::new(metrics.tr_outer.x - metrics.edge_size,
                                                  metrics.tr_outer.y),
                                    &Point2D::new(metrics.tr_outer.x,
@@ -827,7 +889,9 @@ impl FrameBuilder {
                                    clip_mode,
                                    resource_cache,
                                    frame_id,
-                                   RotationKind::Angle90);
+                                   RotationKind::Angle90,
+                                   clip_in.clone(),
+                                   clip_out.clone());
         self.add_box_shadow_corner(&Point2D::new(metrics.br_outer.x - metrics.edge_size,
                                                  metrics.br_outer.y - metrics.edge_size),
                                    &Point2D::new(metrics.br_outer.x, metrics.br_outer.y),
@@ -840,7 +904,9 @@ impl FrameBuilder {
                                    clip_mode,
                                    resource_cache,
                                    frame_id,
-                                   RotationKind::Angle180);
+                                   RotationKind::Angle180,
+                                   clip_in.clone(),
+                                   clip_out.clone());
         self.add_box_shadow_corner(&Point2D::new(metrics.bl_outer.x,
                                                  metrics.bl_outer.y - metrics.edge_size),
                                    &Point2D::new(metrics.bl_outer.x + metrics.edge_size,
@@ -854,9 +920,9 @@ impl FrameBuilder {
                                    clip_mode,
                                    resource_cache,
                                    frame_id,
-                                   RotationKind::Angle270);
-
-        //self.undo_clip_state(clip_state);
+                                   RotationKind::Angle270,
+                                   clip_in,
+                                   clip_out);
     }
 
     fn fill_outside_area_of_inset_box_shadow(&mut self,
@@ -869,9 +935,9 @@ impl FrameBuilder {
         let rect = compute_box_shadow_rect(box_bounds, box_offset, spread_radius);
         let metrics = BoxShadowMetrics::new(&rect, border_radius, blur_radius);
 
-        //let clip_state = self.adjust_clip_for_box_shadow_clip_mode(box_bounds,
-        //                                                           border_radius,
-        //                                                           BoxShadowClipMode::Inset);
+        let (clip_in, clip_out) = clip_for_box_shadow_clip_mode(box_bounds,
+                                                                border_radius,
+                                                                BoxShadowClipMode::Inset);
 
         // Fill in the outside area of the box.
         //
@@ -894,30 +960,32 @@ impl FrameBuilder {
                                             Size2D::new(box_bounds.size.width,
                                                         metrics.tl_outer.y - box_bounds.origin.y)),
                                  color,
-                                 None);
+                                 clip_in.clone(),
+                                 clip_out.clone());
 
         // B:
         self.add_solid_rectangle(&Rect::new(metrics.tr_outer,
                                             Size2D::new(box_bounds.max_x() - metrics.tr_outer.x,
                                                         metrics.br_outer.y - metrics.tr_outer.y)),
                                  color,
-                                 None);
+                                 clip_in.clone(),
+                                 clip_out.clone());
 
         // C:
         self.add_solid_rectangle(&Rect::new(Point2D::new(box_bounds.origin.x, metrics.bl_outer.y),
                                             Size2D::new(box_bounds.size.width,
                                                         box_bounds.max_y() - metrics.br_outer.y)),
                                  color,
-                                 None);
+                                 clip_in.clone(),
+                                 clip_out.clone());
 
         // D:
         self.add_solid_rectangle(&Rect::new(Point2D::new(box_bounds.origin.x, metrics.tl_outer.y),
                                             Size2D::new(metrics.tl_outer.x - box_bounds.origin.x,
                                                         metrics.bl_outer.y - metrics.tl_outer.y)),
                                  color,
-                                 None);
-
-        //self.undo_clip_state(clip_state);
+                                 clip_in,
+                                 clip_out);
     }
 
     pub fn add_box_shadow(&mut self,
@@ -934,7 +1002,7 @@ impl FrameBuilder {
 
         // Fast path.
         if blur_radius == 0.0 && spread_radius == 0.0 && clip_mode == BoxShadowClipMode::None {
-            self.add_solid_rectangle(&rect, color, None);
+            self.add_solid_rectangle(&rect, color, None, None);
             return;
         }
 
@@ -959,6 +1027,8 @@ impl FrameBuilder {
                                               true);
         }
         resource_cache.add_resource_list(&resource_list, frame_id);
+
+        let white_image = resource_cache.get_dummy_color_image();
 
         // Draw the corners.
         self.add_box_shadow_corners(box_bounds,
@@ -985,7 +1055,7 @@ impl FrameBuilder {
         match clip_mode {
             BoxShadowClipMode::None => {
                 // Fill the center area.
-                self.add_solid_rectangle(box_bounds, color, None);
+                self.add_solid_rectangle(box_bounds, color, None, None);
             }
             BoxShadowClipMode::Outset => {
                 // Fill the center area.
@@ -997,13 +1067,16 @@ impl FrameBuilder {
                                   Size2D::new(metrics.br_inner.x - metrics.tl_inner.x,
                                               metrics.br_inner.y - metrics.tl_inner.y));
 
+                    let clip_out_rect = Clip::from_rect(box_bounds);
+
                     // FIXME(pcwalton): This assumes the border radius is zero. That is not always
                     // the case!
-                    //let old_clip_out_rect = self.set_clip_out_rect(Some(*box_bounds));
-
-                    self.add_solid_rectangle(&center_rect, color, None);
-
-                    //self.set_clip_out_rect(old_clip_out_rect);
+                    self.add_box_shadow_rect(&center_rect,
+                                             color,
+                                             white_image,
+                                             RotationKind::Angle0,
+                                             None,
+                                             Some(clip_out_rect));
                 }
             }
             BoxShadowClipMode::Inset => {
@@ -1052,6 +1125,7 @@ impl FrameBuilder {
                                    padding: 0,
                                },
                                None,
+                               None,
                                image_info.is_opaque);
         }
     }
@@ -1059,7 +1133,8 @@ impl FrameBuilder {
     pub fn add_solid_rectangle(&mut self,
                                rect: &Rect<f32>,
                                color: &ColorF,
-                               clip: Option<Clip>) {
+                               clip_in: Option<Clip>,
+                               clip_out: Option<Clip>) {
         if color.a == 0.0 {
             return;
         }
@@ -1079,17 +1154,19 @@ impl FrameBuilder {
                                    rotation: RotationKind::Angle0,
                                    padding: 0,
                                },
-                               clip,
+                               clip_in,
+                               clip_out,
                                color.a == 1.0);
         }
     }
 
-    fn add_texture_rect(&mut self,
-                        rect: &Rect<f32>,
-                        color: &ColorF,
-                        texture_item: &TextureCacheItem,
-                        rotation: RotationKind,
-                        clip: Option<Clip>) {
+    fn add_box_shadow_rect(&mut self,
+                           rect: &Rect<f32>,
+                           color: &ColorF,
+                           texture_item: &TextureCacheItem,
+                           rotation: RotationKind,
+                           clip_in: Option<Clip>,
+                           clip_out: Option<Clip>) {
         if color.a == 0.0 {
             return;
         }
@@ -1100,7 +1177,7 @@ impl FrameBuilder {
             assert!(self.color_texture_id == TextureId(0) || self.color_texture_id == texture_item.texture_id);
             self.color_texture_id = texture_item.texture_id;
 
-            self.add_primitive(PrimitiveKind::Image,
+            self.add_primitive(PrimitiveKind::BoxShadow,
                                xf_rect,
                                PackedPrimitive {
                                    p0: rect.origin,
@@ -1109,12 +1186,13 @@ impl FrameBuilder {
                                    st1: uv_rect.bottom_right,
                                    color0: *color,
                                    color1: *color,
-                                   kind: PrimitiveKind::Image,
+                                   kind: PrimitiveKind::BoxShadow,
                                    rect_kind: RectangleKind::Solid,
                                    rotation: rotation,
                                    padding: 0,
                                },
-                               clip,
+                               clip_in,
+                               clip_out,
                                texture_item.is_opaque);
         }
     }
@@ -1124,7 +1202,7 @@ impl FrameBuilder {
                              color0: ColorF,
                              color1: ColorF,
                              rotation: RotationKind,
-                             clip: Option<Clip>) {
+                             clip_in: Option<Clip>) {
         if color0.a == 0.0 && color1.a == 0.0 {
             return;
         }
@@ -1144,7 +1222,8 @@ impl FrameBuilder {
                                    rotation: rotation,
                                    padding: 0,
                                },
-                               clip,
+                               clip_in,
+                               None,
                                color0.a == 1.0 && color1.a == 1.0);
         }
     }
@@ -1174,6 +1253,7 @@ impl FrameBuilder {
                                    padding: 0,
                                },
                                None,
+                               None,
                                color0.a == 1.0 && color1.a == 1.0);
         }
     }
@@ -1187,11 +1267,11 @@ impl FrameBuilder {
         let top = &border.top;
         let bottom = &border.bottom;
 
-        if left.style != BorderStyle::Solid ||
-           top.style != BorderStyle::Solid ||
-           bottom.style != BorderStyle::Solid ||
-           right.style != BorderStyle::Solid {
-            //println!("TODO: Other border styles");
+        if (left.style != BorderStyle::Solid && left.style != BorderStyle::None) ||
+           (top.style != BorderStyle::Solid && top.style != BorderStyle::None) ||
+           (bottom.style != BorderStyle::Solid && bottom.style != BorderStyle::None) ||
+           (right.style != BorderStyle::Solid && right.style != BorderStyle::None) {
+            println!("TODO: Other border styles {:?} {:?} {:?} {:?}", left.style, top.style, bottom.style, right.style);
             return;
         }
 
@@ -1221,21 +1301,25 @@ impl FrameBuilder {
         self.add_solid_rectangle(&Rect::new(Point2D::new(tl_outer.x, tl_inner.y),
                                            Size2D::new(left.width, bl_inner.y - tl_inner.y)),
                                  &left_color,
+                                 None,
                                  None);
 
         self.add_solid_rectangle(&Rect::new(Point2D::new(tl_inner.x, tl_outer.y),
                                            Size2D::new(tr_inner.x - tl_inner.x, tr_outer.y + top.width - tl_outer.y)),
                                  &top_color,
+                                 None,
                                  None);
 
         self.add_solid_rectangle(&Rect::new(Point2D::new(br_outer.x - right.width, tr_inner.y),
                                            Size2D::new(right.width, br_inner.y - tr_inner.y)),
                                  &right_color,
+                                 None,
                                  None);
 
         self.add_solid_rectangle(&Rect::new(Point2D::new(bl_inner.x, bl_outer.y - bottom.width),
                                            Size2D::new(br_inner.x - bl_inner.x, br_outer.y - bl_outer.y + bottom.width)),
                                  &bottom_color,
+                                 None,
                                  None);
 
         // Corners
@@ -1379,7 +1463,8 @@ impl FrameBuilder {
     fn build_primitive(&self,
                        key: PrimitiveKey,
                        layer_index_in_ubo: u32,
-                       clip_index_in_ubo: Option<u32>) -> Option<RenderPrimitive> {
+                       clip_in_index_in_ubo: Option<u32>,
+                       clip_out_index_in_ubo: Option<u32>) -> Option<RenderPrimitive> {
         let prim = self.get_prim(key.index);
 
         // If this primitive is occluded, there is no
@@ -1390,83 +1475,91 @@ impl FrameBuilder {
             return None;
         }
 
-        // If this primitive is opaque, there's no need for secondary passes.
-        if prim.is_opaque || prim.intersecting_prims_behind.is_empty() {
-            match key.kind {
-                PrimitiveKind::Rectangle => {
-                    let shader = if prim.clip.is_some() {
-                        PrimitiveShader::OpaqueRectangleClip
-                    } else {
-                        PrimitiveShader::OpaqueRectangle
-                    };
-                    Some(RenderPrimitive {
-                        shader: shader,
-                        key: key,
-                        layer_index_in_ubo: layer_index_in_ubo,
-                        clip_index_in_ubo: clip_index_in_ubo,
-                        other_primitives: Vec::new(),
-                    })
+        let mut others = [(PrimitiveIndex(0), LayerTemplateIndex(0)); MAX_PRIMITIVES_PER_PASS-1];
+        if !prim.is_opaque {
+            if prim.intersecting_prims_behind.len() > MAX_PRIMITIVES_PER_PASS-1 {
+                println!("TODO: Found a prim with too many intersecting blends - multiple passes not handled yet!");
+                println!("\tPrimitive {:?} {:?} {}", prim.xf_rect.screen_rect, prim.packed.kind, prim.is_opaque);
+                for other_prim_index in &prim.intersecting_prims_behind {
+                    let other_prim_index = *other_prim_index;
+                    let other_prim = self.get_prim(other_prim_index);
+                    println!("\t\t{:?} {:?} {:?}", other_prim.xf_rect.screen_rect, other_prim.packed.kind, other_prim.is_opaque);
                 }
-                PrimitiveKind::Image => {
-                    Some(RenderPrimitive {
-                        shader: PrimitiveShader::OpaqueImage,
-                        key: key,
-                        layer_index_in_ubo: layer_index_in_ubo,
-                        clip_index_in_ubo: clip_index_in_ubo,
-                        other_primitives: Vec::new(),
-                    })
-                }
-                _ => {
-                    Some(RenderPrimitive {
-                        shader: PrimitiveShader::Generic2,
-                        key: key,
-                        layer_index_in_ubo: layer_index_in_ubo,
-                        clip_index_in_ubo: clip_index_in_ubo,
-                        other_primitives: Vec::new(),
-                    })
-                }
+
+                return None;
             }
-        } else if prim.intersecting_prims_behind.len() == 1 {
-            let back_prim_index = prim.intersecting_prims_behind[0];
-            let back_prim = self.get_prim(back_prim_index);
-            match (key.kind, back_prim.packed.kind) {
-                (PrimitiveKind::Text, PrimitiveKind::Rectangle) => {
-                    Some(RenderPrimitive {
-                        shader: PrimitiveShader::OpaqueRectangleText,
-                        key: key,
-                        layer_index_in_ubo: layer_index_in_ubo,
-                        clip_index_in_ubo: clip_index_in_ubo,
-                        other_primitives: vec![(back_prim_index, back_prim.layer)],
-                    })
-                }
-                _ => {
-                    Some(RenderPrimitive {
-                        shader: PrimitiveShader::Generic2,
-                        key: key,
-                        layer_index_in_ubo: layer_index_in_ubo,
-                        clip_index_in_ubo: clip_index_in_ubo,
-                        other_primitives: vec![(back_prim_index, back_prim.layer)],
-                    })
-                }
-            }
-        } else if prim.intersecting_prims_behind.len() < 4 {
-            let mut others = Vec::new();
-            for other_prim_index in &prim.intersecting_prims_behind {
+
+            for (array_index, other_prim_index) in prim.intersecting_prims_behind.iter().enumerate() {
                 let other_prim_index = *other_prim_index;
                 let other_prim = self.get_prim(other_prim_index);
-                others.push((other_prim_index, other_prim.layer));
+                others[array_index] = (other_prim_index, other_prim.layer);
             }
-            Some(RenderPrimitive {
-                shader: PrimitiveShader::Generic4,
+        }
+
+        let mut shader = None;
+
+        // If this primitive is opaque, there's no need for secondary passes.
+        if prim.is_opaque || prim.intersecting_prims_behind.is_empty() {
+            shader = Some(match (key.kind, prim.clip_in.is_some()) {
+                (PrimitiveKind::Rectangle, false) => PrimitiveShader::Rect,
+                (PrimitiveKind::Rectangle, true) => PrimitiveShader::Rect_Clip,
+                (PrimitiveKind::Image, _) => PrimitiveShader::Image,
+                (PrimitiveKind::Text, _) => PrimitiveShader::Text,
+                (PrimitiveKind::BorderCorner, false) => PrimitiveShader::BorderCorner,
+                (PrimitiveKind::BorderCorner, true) => PrimitiveShader::BorderCorner_Clip,
+                (PrimitiveKind::BoxShadow, _) => PrimitiveShader::BoxShadow,
+            });
+        } else {
+            // Check for special fast paths
+            if prim.intersecting_prims_behind.len() == 1 {
+                let other_prim_index = prim.intersecting_prims_behind.last().unwrap();
+                let other_prim = self.get_prim(*other_prim_index);
+
+                shader = match (key.kind, other_prim.packed.kind, prim.clip_in.is_some()) {
+                    (PrimitiveKind::Text, PrimitiveKind::Rectangle, false) => Some(PrimitiveShader::Text_Rect),
+                    (PrimitiveKind::Image, PrimitiveKind::Rectangle, false) => Some(PrimitiveShader::Image_Rect),
+                    (k0, k1, c) => {
+                        //println!("Missing fast path: {:?} {:?} {:?}", k0, k1, c);
+                        None
+                    }
+                }
+            }
+
+/*
+            if shader.is_none() && prim.intersecting_prims_behind.len() == 2 {
+                let pi1 = prim.intersecting_prims_behind[0];
+                let p1 = self.get_prim(pi1);
+
+                let pi2 = prim.intersecting_prims_behind[1];
+                let p2 = self.get_prim(pi2);
+
+                shader = match (key.kind, p1.packed.kind, p2.packed.kind, prim.clip.is_some()) {
+                    (PrimitiveKind::Text, PrimitiveKind::Text, PrimitiveKind::Rectangle, false) => Some(PrimitiveShader::Text_Rect),
+                    (k0, k1, c) => { println!("TODO2: {:?} {:?} {:?}", k0, k1, c); None }
+                }
+            }
+            */
+
+            if shader.is_none() {
+                // Generic shader technique paths
+                shader = if prim.intersecting_prims_behind.len() == 1 {
+                    Some(PrimitiveShader::Generic2)
+                } else {
+                    Some(PrimitiveShader::Generic4)
+                };
+            }
+        }
+
+        shader.map(|shader| {
+            RenderPrimitive {
+                shader: shader,
                 key: key,
                 layer_index_in_ubo: layer_index_in_ubo,
-                clip_index_in_ubo: clip_index_in_ubo,
+                clip_in_index_in_ubo: clip_in_index_in_ubo,
+                clip_out_index_in_ubo: clip_out_index_in_ubo,
                 other_primitives: others,
-            })
-        } else {
-            println!("TODO: blending with multiple layers {:?}", prim);
-            None
-        }
+            }
+        })
     }
 
     // TODO(gw): Not transform safe!
@@ -1504,7 +1597,13 @@ impl FrameBuilder {
                 let primitive_key = *primitive_key;
                 let prim = self.get_prim(primitive_key.index);
 
-                let clip_index_in_ubo = prim.clip.as_ref().map(|clip| {
+                let clip_in_index_in_ubo = prim.clip_in.as_ref().map(|clip| {
+                    // hack hack hack to ensure it always gets added - refcount these?
+                    let clip_index = ClipIndex(clip_ubo.items.len() as u32);
+                    clip_ubo.maybe_insert_and_get_index(clip_index, clip)
+                });
+
+                let clip_out_index_in_ubo = prim.clip_out.as_ref().map(|clip| {
                     // hack hack hack to ensure it always gets added - refcount these?
                     let clip_index = ClipIndex(clip_ubo.items.len() as u32);
                     clip_ubo.maybe_insert_and_get_index(clip_index, clip)
@@ -1512,14 +1611,16 @@ impl FrameBuilder {
 
                 let render_prim = self.build_primitive(primitive_key,
                                                        layer_index_in_ubo,
-                                                       clip_index_in_ubo)
+                                                       clip_in_index_in_ubo,
+                                                       clip_out_index_in_ubo)
                                       .unwrap_or_else(|| {
                                         RenderPrimitive {
                                             shader: PrimitiveShader::Error,
                                             key: primitive_key,
                                             layer_index_in_ubo: layer_index_in_ubo,
-                                            clip_index_in_ubo: clip_index_in_ubo,
-                                            other_primitives: Vec::new(),
+                                            clip_in_index_in_ubo: clip_in_index_in_ubo,
+                                            clip_out_index_in_ubo: clip_out_index_in_ubo,
+                                            other_primitives: [(PrimitiveIndex(0), LayerTemplateIndex(0)); MAX_PRIMITIVES_PER_PASS-1],
                                         }
                                       });
                 render_prims.push(render_prim);
@@ -1538,7 +1639,8 @@ impl FrameBuilder {
             let main_prim_index_in_ubo = prim_ubo.maybe_insert_and_get_index(render_prim.key.index,
                                                                              &main_prim.packed);
             draw_cmd.set_primitive(0, main_prim_index_in_ubo, render_prim.layer_index_in_ubo);
-            draw_cmd.clip_info[0] = render_prim.clip_index_in_ubo.unwrap_or(INVALID_CLIP_INDEX);
+            draw_cmd.clip_info[0] = render_prim.clip_in_index_in_ubo.unwrap_or(INVALID_CLIP_INDEX);
+            draw_cmd.clip_info[1] = render_prim.clip_out_index_in_ubo.unwrap_or(INVALID_CLIP_INDEX);
 
             for (other_prim_index, other_prim_info) in render_prim.other_primitives.iter().enumerate() {
                 let other_prim = self.get_prim(other_prim_info.0);
@@ -1609,7 +1711,8 @@ impl FrameBuilder {
                      kind: PrimitiveKind,
                      xf_rect: TransformedRect,
                      packed: PackedPrimitive,
-                     clip: Option<Clip>,
+                     clip_in: Option<Clip>,
+                     clip_out: Option<Clip>,
                      is_opaque: bool) {
         let current_layer = *self.layer_stack.last().unwrap();
 
@@ -1630,7 +1733,8 @@ impl FrameBuilder {
             packed: packed,
             intersecting_prims_behind: Vec::new(),
             intersecting_prims_in_front: Vec::new(),
-            clip: clip,
+            clip_in: clip_in,
+            clip_out: clip_out,
         });
         self.layer_instances.last_mut().unwrap().primitives.push(prim_key);
     }
@@ -1646,24 +1750,23 @@ pub struct ClipCorner {
     inner_radius_y: f32,
 }
 
-/*
 impl ClipCorner {
-    pub fn invalid() -> ClipCorner {
+    fn invalid() -> ClipCorner {
         ClipCorner {
             position: Point2D::zero(),
+            padding: Point2D::zero(),
             outer_radius_x: 0.0,
             outer_radius_y: 0.0,
             inner_radius_x: 0.0,
             inner_radius_y: 0.0,
-            padding: Point2D::zero(),
         }
     }
 }
-*/
 
 #[derive(Debug, Clone)]
 pub struct Clip {
-    rect: Rect<f32>,
+    p0: Point2D<f32>,
+    p1: Point2D<f32>,
     top_left: ClipCorner,
     top_right: ClipCorner,
     bottom_left: ClipCorner,
@@ -1671,21 +1774,10 @@ pub struct Clip {
 }
 
 impl Clip {
-    /*
-    pub fn invalid() -> Clip {
-        Clip {
-            rect: Rect::zero(),
-            top_left: ClipCorner::invalid(),
-            top_right: ClipCorner::invalid(),
-            bottom_left: ClipCorner::invalid(),
-            bottom_right: ClipCorner::invalid(),
-        }
-    }
-*/
-
     pub fn from_clip_region(clip: &ComplexClipRegion) -> Clip {
         Clip {
-            rect: clip.rect,
+            p0: clip.rect.origin,
+            p1: clip.rect.bottom_right(),
             top_left: ClipCorner {
                 position: Point2D::new(clip.rect.origin.x + clip.radii.top_left.width,
                                        clip.rect.origin.y + clip.radii.top_left.height),
@@ -1725,11 +1817,23 @@ impl Clip {
         }
     }
 
+    pub fn from_rect(rect: &Rect<f32>) -> Clip {
+        Clip {
+            p0: rect.origin,
+            p1: rect.bottom_right(),
+            top_left: ClipCorner::invalid(),
+            top_right: ClipCorner::invalid(),
+            bottom_left: ClipCorner::invalid(),
+            bottom_right: ClipCorner::invalid(),
+        }
+    }
+
     pub fn from_border_radius(rect: &Rect<f32>,
                               outer_radius: &BorderRadius,
                               inner_radius: &BorderRadius) -> Clip {
         Clip {
-            rect: *rect,
+            p0: rect.origin,
+            p1: rect.bottom_right(),
             top_left: ClipCorner {
                 position: Point2D::new(rect.origin.x + outer_radius.top_left.width,
                                        rect.origin.y + outer_radius.top_left.height),

@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use texture_cache::{BorderType, TextureCache, TextureInsertOp};
-use tiling::{Frame, FrameBuilderConfig, PrimitiveShader, TextBuffer};
+use tiling::{Frame, FrameBuilderConfig, TextBuffer};
 use time::precise_time_ns;
 use webrender_traits::{ColorF, Epoch, PipelineId, RenderNotifier};
 use webrender_traits::{ImageFormat, MixBlendMode, RenderApiSender};
@@ -136,14 +136,8 @@ pub struct Renderer {
     blur_program_id: ProgramId,
     u_direction: UniformLocation,
 
-    opaque_rect_shader: ProgramId,
-    opaque_rect_shader_clip: ProgramId,
-    opaque_image_shader: ProgramId,
-    text_rect_shader: ProgramId,
+    primitive_shaders: [ProgramId; 12],
     text_program_id: ProgramId,
-    generic2_shader: ProgramId,
-    generic4_shader: ProgramId,
-    error_shader: ProgramId,
 
     notifier: Arc<Mutex<Option<Box<RenderNotifier>>>>,
 
@@ -195,13 +189,20 @@ impl Renderer {
         //println!("MAX_UBO_SIZE = {}", max_ubo_size);
 
         let text_program_id = device.create_program("text", "shared_other");
-        let opaque_rect_shader = create_prim_shader("prim_opaque_rect", &mut device);
-        let opaque_rect_shader_clip = create_prim_shader("prim_opaque_rect_clip", &mut device);
-        let opaque_image_shader = create_prim_shader("prim_opaque_image", &mut device);
-        let text_rect_shader = create_prim_shader("prim_rect_text", &mut device);
-        let error_shader = create_prim_shader("prim_error", &mut device);
-        let generic2_shader = create_prim_shader("prim_generic_2", &mut device);
-        let generic4_shader = create_prim_shader("prim_generic_4", &mut device);
+        let primitive_shaders: [ProgramId; 12] = [
+            create_prim_shader("ps_rect", &mut device),
+            create_prim_shader("ps_rect_clip", &mut device),
+            create_prim_shader("ps_image", &mut device),
+            create_prim_shader("ps_text", &mut device),
+            create_prim_shader("ps_border_corner", &mut device),
+            create_prim_shader("ps_border_corner_clip", &mut device),
+            create_prim_shader("ps_box_shadow", &mut device),
+            create_prim_shader("ps_fp_text_rect", &mut device),
+            create_prim_shader("ps_fp_image_rect", &mut device),
+            create_prim_shader("ps_generic2", &mut device),
+            create_prim_shader("ps_generic4", &mut device),
+            create_prim_shader("prim_error", &mut device),
+        ];
 
         let texture_ids = device.create_texture_ids(1024);
         let mut texture_cache = TextureCache::new(texture_ids);
@@ -344,14 +345,8 @@ impl Renderer {
             quad_program_id: quad_program_id,
             box_shadow_program_id: box_shadow_program_id,
             blur_program_id: blur_program_id,
-            opaque_rect_shader: opaque_rect_shader,
-            opaque_rect_shader_clip: opaque_rect_shader_clip,
-            opaque_image_shader: opaque_image_shader,
-            generic2_shader: generic2_shader,
-            generic4_shader: generic4_shader,
-            text_rect_shader: text_rect_shader,
+            primitive_shaders: primitive_shaders,
             text_program_id: text_program_id,
-            error_shader: error_shader,
             u_blend_params: UniformLocation::invalid(),
             u_filter_params: UniformLocation::invalid(),
             u_direction: UniformLocation::invalid(),
@@ -1379,15 +1374,7 @@ impl Renderer {
                 gl::buffer_data(gl::UNIFORM_BUFFER, &batch.commands, gl::STATIC_DRAW);
                 gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_COMMANDS, cmd_ubo);
 
-                let program_id = match batch.shader {
-                    PrimitiveShader::OpaqueRectangle => self.opaque_rect_shader,
-                    PrimitiveShader::OpaqueRectangleClip => self.opaque_rect_shader_clip,
-                    PrimitiveShader::OpaqueRectangleText => self.text_rect_shader,
-                    PrimitiveShader::OpaqueImage => self.opaque_image_shader,
-                    PrimitiveShader::Generic2 => self.generic2_shader,
-                    PrimitiveShader::Generic4 => self.generic4_shader,
-                    PrimitiveShader::Error => self.error_shader,
-                };
+                let program_id = self.primitive_shaders[batch.shader as usize];
                 self.device.bind_program(program_id, &projection);
                 self.device.draw_indexed_triangles_instanced_u16(6, batch.commands.len() as i32);
 
