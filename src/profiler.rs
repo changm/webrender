@@ -439,17 +439,17 @@ impl Profiler {
         ], debug_renderer, true);
 
         self.draw_counters(&[
+            &renderer_profile.draw_calls,
+            &renderer_profile.vertices,
+        ], debug_renderer, true);
+
+        self.draw_counters(&[
             &backend_profile.total_time,
             &renderer_timers.cpu_time,
             &renderer_timers.gpu_time_text,
             &renderer_timers.gpu_time_tiling,
             &renderer_timers.gpu_time_complex,
             &renderer_timers.gpu_time_total,
-        ], debug_renderer, false);
-
-        self.draw_counters(&[
-            &renderer_profile.draw_calls,
-            &renderer_profile.vertices,
         ], debug_renderer, false);
 
         self.backend_time.push(backend_profile.total_time.nanoseconds);

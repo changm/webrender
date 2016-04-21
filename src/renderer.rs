@@ -1378,6 +1378,9 @@ impl Renderer {
                 self.device.bind_program(program_id, &projection);
                 self.device.draw_indexed_triangles_instanced_u16(6, batch.commands.len() as i32);
 
+                self.profile_counters.vertices.add(6 * batch.commands.len());
+                self.profile_counters.draw_calls.inc();
+
                 gl::delete_buffers(&cmd_ubos)
             }
         }
