@@ -2210,8 +2210,11 @@ impl FrameBuilder {
 
             for (node_index, node) in layer.quadtree.nodes.iter().enumerate() {
                 if node.is_leaf() {
-                    let node_screen_rect = TransformedRect::new(&node.rect,
-                                                                &layer.packed.transform);
+                    let node_screen_rect = TransformedRect::new(&node.rect
+                                                                     .translate(&layer.packed
+                                                                                      .offset),
+                                                                &layer.packed
+                                                                      .transform);
 
                     if node_screen_rect.screen_rect.intersects(&screen_rect) {
                         tiles.push(Tile {
@@ -2308,7 +2311,9 @@ impl FrameBuilder {
                 }
 
                 if self.debug {
-                    debug_rects.push((cover_part_indices.len(), layer.packed.transform.transform_rect(&rect)));
+                    debug_rects.push((cover_part_indices.len(), layer.packed
+                                                                     .transform
+                                                                     .transform_rect(&rect.translate(&layer.packed.offset))));
                 }
 
                 let mut draw_cmd = PackedDrawCommand::new(rect, layer.index_in_ubo);
