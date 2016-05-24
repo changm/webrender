@@ -1116,52 +1116,55 @@ impl Renderer {
                                          ORTHO_NEAR_PLANE,
                                          ORTHO_FAR_PLANE);
 
-        let prim_ubos = gl::gen_buffers(frame.prim_ubos.len() as gl::GLint);
-        for (i, prim_ubo) in prim_ubos.iter().enumerate() {
-            gl::bind_buffer(gl::UNIFORM_BUFFER, *prim_ubo);
-            gl::buffer_data(gl::UNIFORM_BUFFER, &frame.prim_ubos[i].items, gl::STATIC_DRAW);
-        }
-
-        let cmd_ubos = gl::gen_buffers(frame.cmd_ubos.len() as gl::GLint);
-        for (i, cmd_ubo) in cmd_ubos.iter().enumerate() {
-            gl::bind_buffer(gl::UNIFORM_BUFFER, *cmd_ubo);
-            gl::buffer_data(gl::UNIFORM_BUFFER, &frame.cmd_ubos[i].items, gl::STATIC_DRAW);
-        }
-
-        let layer_ubos = gl::gen_buffers(1);
-        let layer_ubo = layer_ubos[0];
-        gl::bind_buffer(gl::UNIFORM_BUFFER, layer_ubo);
-        gl::buffer_data(gl::UNIFORM_BUFFER, &frame.layer_ubo.items, gl::STATIC_DRAW);
-        gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_LAYERS, layer_ubo);
-
-        self.device.bind_color_texture(frame.color_texture_id);
-        self.device.bind_mask_texture(self.text_composite_target);
-        self.device.bind_vao(self.quad_vao_id);
-
-        for batch in &frame.batches {
-            if batch.opaque {
-                gl::disable(gl::BLEND);
-            } else {
-                gl::enable(gl::BLEND);
+        if !frame.prim_ubos.is_empty() && !frame.cmd_ubos.is_empty() {
+            let prim_ubos = gl::gen_buffers(frame.prim_ubos.len() as gl::GLint);
+            for (i, prim_ubo) in prim_ubos.iter().enumerate() {
+                gl::bind_buffer(gl::UNIFORM_BUFFER, *prim_ubo);
+                gl::buffer_data(gl::UNIFORM_BUFFER, &frame.prim_ubos[i].items, gl::STATIC_DRAW);
             }
 
-            gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_PRIMITIVES, prim_ubos[batch.prim_ubo_index]);
-            gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_COMMANDS, cmd_ubos[batch.cmd_ubo_index]);
-
-            let shader = &self.primitive_shaders[batch.shader as usize];
-            self.device.bind_program(shader.program_id, &projection);
-
-            for draw_call in &batch.draw_calls {
-                self.device.set_uniform_1i(shader.u_cmd_offset, draw_call.cmd_offset as i32);
-                self.device.draw_indexed_triangles_instanced_u16(6, draw_call.instance_count as i32);
-                self.profile_counters.vertices.add(6 * draw_call.instance_count);
-                self.profile_counters.draw_calls.inc();
+            let cmd_ubos = gl::gen_buffers(frame.cmd_ubos.len() as gl::GLint);
+            for (i, cmd_ubo) in cmd_ubos.iter().enumerate() {
+                gl::bind_buffer(gl::UNIFORM_BUFFER, *cmd_ubo);
+                gl::buffer_data(gl::UNIFORM_BUFFER, &frame.cmd_ubos[i].items, gl::STATIC_DRAW);
             }
+
+            let layer_ubos = gl::gen_buffers(1);
+            let layer_ubo = layer_ubos[0];
+            gl::bind_buffer(gl::UNIFORM_BUFFER, layer_ubo);
+            gl::buffer_data(gl::UNIFORM_BUFFER, &frame.layer_ubo.items, gl::STATIC_DRAW);
+            gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_LAYERS, layer_ubo);
+
+            self.device.bind_color_texture(frame.color_texture_id);
+            self.device.bind_mask_texture(self.text_composite_target);
+            self.device.bind_vao(self.quad_vao_id);
+
+            for batch in &frame.batches {
+                if batch.opaque {
+                    gl::disable(gl::BLEND);
+                } else {
+                    gl::enable(gl::BLEND);
+                }
+
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_PRIMITIVES, prim_ubos[batch.prim_ubo_index]);
+                gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_COMMANDS, cmd_ubos[batch.cmd_ubo_index]);
+
+                let shader = &self.primitive_shaders[batch.shader as usize];
+                self.device.bind_program(shader.program_id, &projection);
+
+                for draw_call in &batch.draw_calls {
+                    self.device.set_uniform_1i(shader.u_cmd_offset, draw_call.cmd_offset as i32);
+                    self.device.draw_indexed_triangles_instanced_u16(6, draw_call.instance_count as i32);
+                    self.profile_counters.vertices.add(6 * draw_call.instance_count);
+                    self.profile_counters.draw_calls.inc();
+                }
+            }
+
+            gl::delete_buffers(&layer_ubos);
+            gl::delete_buffers(&prim_ubos);
+            gl::delete_buffers(&cmd_ubos);
         }
 
-        gl::delete_buffers(&layer_ubos);
-        gl::delete_buffers(&prim_ubos);
-        gl::delete_buffers(&cmd_ubos);
         gl::disable(gl::BLEND);
 
         self.gpu_profile_tiling.end();

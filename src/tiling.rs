@@ -2365,6 +2365,38 @@ impl FrameBuilder {
             tile.result = Some(compiled_tile);
         }
 
+        // todo(gw): borrow ck hacks!!
+        let mut occluded_indices = Vec::new();
+
+        for (tile_index, tile) in tiles.iter().enumerate() {
+            let compiled_tile = tile.result.as_ref().unwrap();
+            let mut is_occluded = false;
+
+            // Occlusion test - check for tiles that cannot contribute to the
+            // scene due to occlusion by an opaque tile.
+            tile_tree.visit(&tile.screen_rect.screen_rect, &mut |_, node_items| {
+                if is_occluded {
+                    return;
+                }
+
+                for other_index in node_items {
+                    let other_index = *other_index;
+                    if other_index > tile_index {
+                        let other_tile = &tiles[other_index];
+                        if other_tile.result.as_ref().unwrap().is_opaque &&
+                           other_tile.screen_rect.screen_rect.contains_rect(&tile.screen_rect.screen_rect) {
+                            is_occluded = true;
+                            return;
+                        }
+                    }
+                }
+            });
+
+            occluded_indices.push(is_occluded);
+        }
+
+        debug_assert!(occluded_indices.len() == tiles.len());
+
         // Create batches, based on overlap. Also do basic occlusion culling here.
         let part_size = mem::size_of::<PrimitivePart>();
         let cmd_size = mem::size_of::<PackedDrawCommand>();
@@ -2373,11 +2405,21 @@ impl FrameBuilder {
         let mut cmd_ubos: Vec<Ubo<PackedDrawCommand>> = Vec::new();
         let mut batches: Vec<Batch> = Vec::new();
 
-        for tile in tiles {
+        //println!("-- render --");
+
+        for (tile_index, tile) in tiles.drain(..).enumerate() {
+            if occluded_indices[tile_index] {
+                //println!("FOUND OCCLUDED! {:?}", tile.screen_rect.screen_rect);
+                continue;
+            }
+
             let compiled_tile = tile.result.unwrap();
             let layer = &self.layers[tile.layer_index];
             let is_opaque = layer.packed.blend_info[0] == 1.0 &&
                             compiled_tile.is_opaque;
+
+            let node = &layer.quadtree.nodes[tile.node_index];
+            //println!("NODE: {:?} {}", node.rect, is_opaque);
 
             let need_new_prim_ubo = match prim_ubos.last() {
                 Some(ubo) => !ubo.can_fit(&compiled_tile.parts, max_ubo_size),

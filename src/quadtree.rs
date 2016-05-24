@@ -181,4 +181,36 @@ impl<T: Copy + Debug> Quadtree<T> {
         self.insert_internal(NodeIndex(0), item, 0, f);
     }
 
+    fn visit_node<F>(&self,
+                     node_index: NodeIndex,
+                     query_rect: &Rect<f32>,
+                     f: &mut F) where F: FnMut(&Rect<f32>, &Vec<T>) {
+        let NodeIndex(node_index) = node_index;
+        let node_index = node_index as usize;
+        let node = &self.nodes[node_index];
+
+        if node.rect.intersects(query_rect) {
+            match node.children {
+                Some(child_index) => {
+                    let NodeIndex(child_index) = child_index;
+                    let child_index = child_index as u32;
+
+                    for i in 0..2 {
+                        self.visit_node(NodeIndex(child_index + i),
+                                        query_rect,
+                                        f);
+                    }
+                }
+                None => {
+                    f(&node.rect, &node.items);
+                }
+            }
+        }
+    }
+
+    pub fn visit<F>(&self,
+                    query_rect: &Rect<f32>,
+                    f: &mut F) where F: FnMut(&Rect<f32>, &Vec<T>) {
+        self.visit_node(NodeIndex(0), query_rect, f);
+    }
 }
