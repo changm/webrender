@@ -258,6 +258,9 @@ pub enum PrimitiveShader {
     Prim1_Clip,
     Prim2_Clip,
     Prim3_Clip,
+    Prim1_Rect,
+    Prim1_Image,
+    Prim2_RectText,
 }
 
 #[derive(Debug)]
@@ -2343,9 +2346,22 @@ impl FrameBuilder {
                     }
 
                     match (cover_part_indices.len(), need_clip) {
-                        (0, _) => panic!("wtf"),
-                        (1, false) => PrimitiveShader::Prim1,
-                        (2, false) => PrimitiveShader::Prim2,
+                        (1, false) => {
+                            let kind = part_list.parts[draw_cmd.prim_indices[0] as usize].kind;
+                            match kind {
+                                PrimitiveKind::Rectangle => PrimitiveShader::Prim1_Rect,
+                                PrimitiveKind::Image => PrimitiveShader::Prim1_Image,
+                                _ => PrimitiveShader::Prim1,
+                            }
+                        }
+                        (2, false) => {
+                            let kind0 = part_list.parts[draw_cmd.prim_indices[0] as usize].kind;
+                            let kind1 = part_list.parts[draw_cmd.prim_indices[1] as usize].kind;
+                            match (kind0, kind1) {
+                                (PrimitiveKind::Text, PrimitiveKind::Rectangle) => PrimitiveShader::Prim2_RectText,
+                                _ => PrimitiveShader::Prim2,
+                            }
+                        }
                         (3, false) => PrimitiveShader::Prim3,
                         (1, true) => PrimitiveShader::Prim1_Clip,
                         (2, true) => PrimitiveShader::Prim2_Clip,

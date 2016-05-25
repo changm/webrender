@@ -131,7 +131,7 @@ pub struct Renderer {
     blur_program_id: ProgramId,
     u_direction: UniformLocation,
 
-    primitive_shaders: [PrimShader; 7],
+    primitive_shaders: [PrimShader; 10],
     text_program_id: ProgramId,
 
     notifier: Arc<Mutex<Option<Box<RenderNotifier>>>>,
@@ -182,7 +182,7 @@ impl Renderer {
         gl::uniform_block_binding(text_program_id.0, text_ubo_index, UBO_BIND_GLYPHS);
         println!("TextShader: glyphs={}", text_ubo_index);
 
-        let primitive_shaders: [PrimShader; 7] = [
+        let primitive_shaders: [PrimShader; 10] = [
             create_prim_shader("ps_error", &mut device),
             create_prim_shader("ps_generic1", &mut device),
             create_prim_shader("ps_generic2", &mut device),
@@ -190,6 +190,9 @@ impl Renderer {
             create_prim_shader("ps_generic1_clip", &mut device),
             create_prim_shader("ps_generic2_clip", &mut device),
             create_prim_shader("ps_generic3_clip", &mut device),
+            create_prim_shader("ps_rect", &mut device),
+            create_prim_shader("ps_image", &mut device),
+            create_prim_shader("ps_rect_text", &mut device),
         ];
 
         let texture_ids = device.create_texture_ids(1024);
