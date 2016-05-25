@@ -92,29 +92,29 @@ impl PartitionNode {
                 let rx1 = rx0 + rect.size.width;
                 let ry1 = ry0 + rect.size.height;
 
-                let sx0 = self.rect.origin.x;
-                let sy0 = self.rect.origin.y;
-                let sx1 = sx0 + self.rect.size.width;
-                let sy1 = sy0 + self.rect.size.height;
+                let sx0 = self.rect.origin.x + 0.5;
+                let sy0 = self.rect.origin.y + 0.5;
+                let sx1 = sx0 + self.rect.size.width - 1.0;
+                let sy1 = sy0 + self.rect.size.height - 1.0;
 
                 let dist_from_p0 = Point2D::new((rx0 - self.center_point.x).abs(),
                                                 (ry0 - self.center_point.y).abs());
-                if rx0 > sx0 && dist_from_p0.x < self.split_distance.x {
+                if rx0 > sx0 && rx0 < sx1 && dist_from_p0.x < self.split_distance.x {
                     self.split_distance.x = dist_from_p0.x;
                     self.split_point.x = rx0;
                 }
-                if ry0 > sy0 && dist_from_p0.y < self.split_distance.y {
+                if ry0 > sy0 && ry0 < sy1 && dist_from_p0.y < self.split_distance.y {
                     self.split_distance.y = dist_from_p0.y;
                     self.split_point.y = ry0;
                 }
 
                 let dist_from_p1 = Point2D::new((rx1 - self.center_point.x).abs(),
                                                 (ry1 - self.center_point.y).abs());
-                if rx1 < sx1 && dist_from_p1.x < self.split_distance.x {
+                if rx1 > sx0 && rx1 < sx1 && dist_from_p1.x < self.split_distance.x {
                     self.split_distance.x = dist_from_p1.x;
                     self.split_point.x = rx1;
                 }
-                if ry1 < sy1 && dist_from_p1.y < self.split_distance.y {
+                if ry1 > sy0 && ry1 < sy1 && dist_from_p1.y < self.split_distance.y {
                     self.split_distance.y = dist_from_p1.y;
                     self.split_point.y = ry1;
                 }
@@ -153,17 +153,16 @@ impl PartitionNode {
         let x1 = x0 + self.rect.size.width;
         let y1 = y0 + self.rect.size.height;
 
-        //debug_assert!(self.split_point.x > x0);
-        //debug_assert!(self.split_point.x < x1);
-        //debug_assert!(self.split_point.y > y0);
-        //debug_assert!(self.split_point.y < y1);
-
         let (r0, r1) = match actual_split {
             SplitKind::Horizontal => {
+                debug_assert!(self.split_point.y > y0);
+                debug_assert!(self.split_point.y < y1);
                 (Rect::from_points(x0, y0, x1, self.split_point.y),
                  Rect::from_points(x0, self.split_point.y, x1, y1))
             }
             SplitKind::Vertical => {
+                debug_assert!(self.split_point.x > x0);
+                debug_assert!(self.split_point.x < x1);
                 (Rect::from_points(x0, y0, self.split_point.x, y1),
                  Rect::from_points(self.split_point.x, y0, x1, y1))
             }
@@ -212,8 +211,8 @@ fn partition_parts<F>(bounding_rect: Rect<f32>,
         root.add(part_index, part);
     }
 
-    let min_size = 0.0;
-    //debug_assert!(min_size > 0.0);
+    let min_size = 0.5;
+    debug_assert!(min_size > 0.0);
 
     root.split(min_size, parts);     // XXX Todo!
     root.collect(&Vec::new(), f);
@@ -328,6 +327,7 @@ impl<TYPE: Clone> Ubo<TYPE> {
     }
 }
 
+#[derive(Debug)]
 pub struct Tile {
     layer_index: usize,
     node_index: usize,
@@ -336,6 +336,7 @@ pub struct Tile {
     pipeline_id: PipelineId,
 }
 
+#[derive(Debug)]
 pub struct CompiledTile {
     pub is_opaque: bool,
     pub parts: Vec<PrimitivePart>,
@@ -2209,7 +2210,7 @@ impl FrameBuilder {
             }
 
             for (node_index, node) in layer.quadtree.nodes.iter().enumerate() {
-                if node.is_leaf() {
+                if node.is_leaf() && !node.items.is_empty() {
                     let node_screen_rect = TransformedRect::new(&node.rect
                                                                      .translate(&layer.packed
                                                                                       .offset),
@@ -2285,6 +2286,9 @@ impl FrameBuilder {
             let node = &layer.quadtree.nodes[tile.node_index];
 
             //debug_rects.push((node.items.len(), layer.packed.transform.transform_rect(&node.rect)));
+            if layer.packed.blend_info[0] < 1.0 {
+                compiled_tile.is_opaque = false;
+            }
 
             partition_parts(node.rect, &part_list.parts, &mut |rect, mut cover_part_indices, mut partial_part_indices| {
                 if cover_part_indices.is_empty() {
@@ -2405,21 +2409,14 @@ impl FrameBuilder {
         let mut cmd_ubos: Vec<Ubo<PackedDrawCommand>> = Vec::new();
         let mut batches: Vec<Batch> = Vec::new();
 
-        //println!("-- render --");
-
         for (tile_index, tile) in tiles.drain(..).enumerate() {
             if occluded_indices[tile_index] {
-                //println!("FOUND OCCLUDED! {:?}", tile.screen_rect.screen_rect);
                 continue;
             }
 
             let compiled_tile = tile.result.unwrap();
             let layer = &self.layers[tile.layer_index];
-            let is_opaque = layer.packed.blend_info[0] == 1.0 &&
-                            compiled_tile.is_opaque;
-
             let node = &layer.quadtree.nodes[tile.node_index];
-            //println!("NODE: {:?} {}", node.rect, is_opaque);
 
             let need_new_prim_ubo = match prim_ubos.last() {
                 Some(ubo) => !ubo.can_fit(&compiled_tile.parts, max_ubo_size),
@@ -2460,7 +2457,7 @@ impl FrameBuilder {
                        batch.prim_ubo_index == prim_ubo_index &&
                        batch.cmd_ubo_index == cmd_ubo_index &&
                        batch.layer_index == tile.layer_index &&
-                       batch.opaque == is_opaque {
+                       batch.opaque == compiled_tile.is_opaque {
 
                         let last_offset = {
                             let dc = &batch.draw_calls.last().unwrap();
@@ -2484,7 +2481,7 @@ impl FrameBuilder {
                 if !found_batch {
                     batches.push(Batch {
                         layer_index: tile.layer_index,
-                        opaque: is_opaque,
+                        opaque: compiled_tile.is_opaque,
                         prim_ubo_index: prim_ubo_index,
                         cmd_ubo_index: cmd_ubo_index,
                         shader: key.shader,

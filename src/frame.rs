@@ -666,13 +666,16 @@ impl Frame {
 
                 // Build world space transform
                 let origin = parent_info.offset_from_current_layer + stacking_context.bounds.origin;
-                let local_transform = if composition_operations.is_empty() {
-                    Matrix4D::identity().translate(origin.x, origin.y, 0.0)
-                                        .mul(&stacking_context.transform)
-                                        .translate(-origin.x, -origin.y, 0.0)
-                } else {
-                    Matrix4D::identity()
-                };
+                //let local_transform = if composition_operations.is_empty() {
+                //    Matrix4D::identity().translate(origin.x, origin.y, 0.0)
+                //                        .mul(&stacking_context.transform)
+                //                        .translate(-origin.x, -origin.y, 0.0)
+                //} else {
+                //    Matrix4D::identity()
+                //};
+                let local_transform = Matrix4D::identity().translate(origin.x, origin.y, 0.0)
+                                                          .mul(&stacking_context.transform)
+                                                          .translate(-origin.x, -origin.y, 0.0);
 
                 let transform = parent_info.perspective.mul(&parent_info.transform)
                                                        .mul(&local_transform);
@@ -682,11 +685,14 @@ impl Frame {
                                                       .mul(&stacking_context.perspective)
                                                       .translate(-origin.x, -origin.y, 0.0);
 
+                /*
                 let viewport_rect = if composition_operations.is_empty() {
                     parent_info.viewport_rect
                 } else {
                     Rect::new(Point2D::new(0.0, 0.0), parent_info.viewport_rect.size)
                 };
+                */
+                let viewport_rect = parent_info.viewport_rect;
 
                 let viewport_transform = transform;
 
