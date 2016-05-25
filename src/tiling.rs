@@ -515,6 +515,8 @@ struct LayerTemplate {
     scroll_layer_id: ScrollLayerId,
     clips: Vec<Clip>,
     clip_stack: Vec<ClipIndex>,
+    screen_rect: TransformedRect,
+    is_opaque: bool,
 }
 
 #[repr(u32)]
@@ -1568,6 +1570,10 @@ impl FrameBuilder {
             clip_stack.push(ClipIndex(clip_index as u32));
         }
 
+        // todo(gw): This is wrong!!
+        let screen_rect = TransformedRect::new(&rect.translate(&offset),
+                                               &transform);
+
         let template = LayerTemplate {
             packed: PackedLayer {
                 inv_transform: transform.invert(),
@@ -1585,6 +1591,8 @@ impl FrameBuilder {
             scroll_layer_id: scroll_layer_id,
             clips: clips,
             clip_stack: clip_stack,
+            screen_rect: screen_rect,
+            is_opaque: opacity == 1.0,
         };
 
         self.layer_stack.push(LayerTemplateIndex(self.layers.len() as u32));
@@ -2196,6 +2204,8 @@ impl FrameBuilder {
             layer.packed.transform = transform;
             layer.packed.inv_transform = transform.invert();
             layer.index_in_ubo = layer_ubo.push(&layer.packed);
+            layer.screen_rect = TransformedRect::new(&layer.rect.translate(&layer.packed.offset),
+                                                     &transform);
         }
 
         let screen_rect = Rect::new(Point2D::zero(),
@@ -2282,8 +2292,9 @@ impl FrameBuilder {
                                                   resource_cache,
                                                   frame_id);
 
-            let layer = &self.layers[tile.layer_index];
+            let layer = &mut self.layers[tile.layer_index];
             let node = &layer.quadtree.nodes[tile.node_index];
+            let debug = self.debug;
 
             //debug_rects.push((node.items.len(), layer.packed.transform.transform_rect(&node.rect)));
             if layer.packed.blend_info[0] < 1.0 {
@@ -2314,7 +2325,7 @@ impl FrameBuilder {
                     Opacity::Translucent => compiled_tile.is_opaque = false,
                 }
 
-                if self.debug {
+                if debug {
                     debug_rects.push((cover_part_indices.len(), layer.packed
                                                                      .transform
                                                                      .transform_rect(&rect.translate(&layer.packed.offset))));
@@ -2365,6 +2376,7 @@ impl FrameBuilder {
             });
 
             compiled_tile.parts = part_list.parts;
+            layer.is_opaque = layer.is_opaque && compiled_tile.is_opaque;
 
             tile.result = Some(compiled_tile);
         }
@@ -2391,6 +2403,15 @@ impl FrameBuilder {
                            other_tile.screen_rect.screen_rect.contains_rect(&tile.screen_rect.screen_rect) {
                             is_occluded = true;
                             return;
+                        }
+
+                        if other_tile.layer_index > tile.layer_index {
+                            let other_layer = &self.layers[other_tile.layer_index];
+                            if other_layer.is_opaque &&
+                               other_layer.screen_rect.screen_rect.contains_rect(&tile.screen_rect.screen_rect) {
+                                is_occluded = true;
+                                return;
+                            }
                         }
                     }
                 }
