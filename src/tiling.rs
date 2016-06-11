@@ -27,65 +27,6 @@ use webrender_traits::{BoxShadowClipMode, PipelineId, ScrollLayerId};
 
 const INVALID_LAYER_INDEX: u32 = 0xffffffff;
 
-/*
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum BlendInput {
-    None,
-    InitialColor,
-    PreviousOutput,
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum BlendKind {
-    None,
-    Opacity,
-}
-
-#[derive(Debug)]
-struct LayerInfo {
-    blend_input: BlendInput,
-    blend_kind: BlendKind,
-    layer_index: RenderLayerIndex,
-    instances: Vec<RenderableInstanceId>,
-    value: f32,
-    last_prim_is_opaque: bool,
-}
-
-impl LayerInfo {
-    fn new(layer_index: RenderLayerIndex,
-           value: f32) -> LayerInfo {
-        LayerInfo {
-            blend_input: BlendInput::None,
-            blend_kind: BlendKind::None,
-            layer_index: layer_index,
-            value: value,
-            instances: Vec::new(),
-            last_prim_is_opaque: false,
-        }
-    }
-
-    fn add_prim(&mut self,
-                id: RenderableInstanceId,
-                layer_index: RenderLayerIndex,
-                prim_is_opaque: bool) -> bool {
-        debug_assert!(layer_index == self.layer_index);
-
-        if self.last_prim_is_opaque {
-            false
-        } else {
-            self.instances.push(id);
-            self.last_prim_is_opaque = prim_is_opaque;
-            true
-        }
-    }
-
-    fn is_opaque(&self) -> bool {
-        self.value == 1.0 &&
-        self.last_prim_is_opaque
-    }
-}
-*/
-
 #[derive(Debug)]
 struct TilingInfo {
     x_tile_count: i32,
@@ -202,78 +143,33 @@ pub enum CompositeShader {
     Layer2_Prim2_Opaque
 }
 
-/*
-#[derive(Debug, Clone, Copy)]
-pub struct CompositeLayer {
-    pub first_prim_index: u32,
-    pub prim_count: u32,
-    pub pad0: [u32; 2],
-    pub value: f32,
-    pub pad1: [u32; 3],
-}
-
-impl CompositeLayer {
-    fn invalid() -> CompositeLayer {
-        CompositeLayer {
-            first_prim_index: 0,
-            prim_count: 0,
-            pad0: [0, 0],
-            value: 0.0,
-            pad1: [0, 0, 0],
-        }
-    }
-}*/
-
-#[repr(u32)]
-#[derive(Debug, Clone, Copy)]
-pub enum BlendMode {
-    None = 0,
-    Accumulate,
-    LayerOpacity,
-}
-
 #[derive(Debug, Clone)]
 pub struct CompositeTile {
     pub rect: Rect<DevicePixel>,
     pub prim_indices: [RenderableInstanceId; MAX_PRIMS_PER_COMPOSITE],
-    pub blend_modes: [BlendMode; MAX_PRIMS_PER_COMPOSITE],
-    pub layer_values: [f32; MAX_PRIMS_PER_COMPOSITE],
+    pub layer_indices: [u32; MAX_PRIMS_PER_COMPOSITE],
 }
 
 impl CompositeTile {
     fn new(rect: &Rect<DevicePixel>) -> CompositeTile {
         CompositeTile {
             rect: *rect,
-            //layers: [CompositeLayer::invalid(); MAX_LAYERS_PER_COMPOSITE],
             prim_indices: unsafe { mem::zeroed() },
-            blend_modes: unsafe { mem::zeroed() },
-            layer_values: unsafe { mem::zeroed() },
+            layer_indices: [
+                INVALID_LAYER_INDEX,
+                INVALID_LAYER_INDEX,
+                INVALID_LAYER_INDEX,
+                INVALID_LAYER_INDEX,
+            ],
         }
     }
-
-/*
-    fn set_layer(&mut self,
-                 layer_index: usize,
-                 first_prim_index: u32,
-                 prim_count: u32,
-                 value: f32) {
-        self.layers[layer_index] = CompositeLayer {
-            first_prim_index: first_prim_index,
-            prim_count: prim_count,
-            pad0: [0, 0],
-            value: value,
-            pad1: [0, 0, 0],
-        };
-    }*/
 
     fn set_primitive(&mut self,
                      cmd_index: usize,
                      prim_index: RenderableInstanceId,
-                     blend_mode: BlendMode,
-                     layer_value: f32) {
+                     layer_index: u32) {
         self.prim_indices[cmd_index] = prim_index;
-        self.blend_modes[cmd_index] = blend_mode;
-        self.layer_values[cmd_index] = layer_value;
+        self.layer_indices[cmd_index] = layer_index;
     }
 }
 
@@ -2052,7 +1948,7 @@ impl FrameBuilder {
                  pipeline_auxiliary_lists: &HashMap<PipelineId, AuxiliaryLists, BuildHasherDefault<FnvHasher>>,
                  layer_map: &HashMap<ScrollLayerId, Layer, BuildHasherDefault<FnvHasher>>) -> Frame {
         //let _pf = util::ProfileScope::new("--build--");
-        println!("-- build --");
+
         // Remove layers that are transparent.
         self.layers.retain(|layer| {
             layer.opacity > 0.0
@@ -2093,7 +1989,7 @@ impl FrameBuilder {
             layer_ubo.push(&PackedLayer {
                 transform: layer.transform,
                 inv_transform: layer.transform.invert(),
-                blend_info: [0.0, 0.0, 0.0, 0.0],
+                blend_info: [layer.opacity, 0.0, 0.0, 0.0],
                 screen_vertices: layer.xf_rect.as_ref().unwrap().vertices,
             });
 
@@ -2186,14 +2082,12 @@ impl FrameBuilder {
         }
 
         for tile in &mut tiles {
-            println!("process tile");
             let debug_rects = &mut tile.debug_rects;
             let error_tiles = &mut tile.error_tiles;
             let clear_tiles = &mut tile.clear_tiles;
             let bsp_tree = &mut tile.bsp_tree;
             let batches = &mut tile.batches;
             let instances = &mut tile.instances;
-            //let mut layer_buffer: Vec<LayerInfo> = Vec::new();
             let mut samplers = [
                 TextureId(0),
                 TextureId(0),
@@ -2229,8 +2123,6 @@ impl FrameBuilder {
                     };
                     debug_rects.push(debug_rect);
                 }
-
-                println!("before {:?}", cover_indices);
 
                 let mut layer_is_opaque = false;
                 let mut tile_is_opaque = false;
@@ -2268,8 +2160,6 @@ impl FrameBuilder {
                     need_prim
                 });
 
-                println!("after {:?}", cover_indices);
-
                 if cover_indices.len() > MAX_PRIMS_PER_COMPOSITE {
                     error_tiles.push(ErrorTile {
                         rect: *rect,
@@ -2292,24 +2182,16 @@ impl FrameBuilder {
 
                     samplers[next_prim_index] = renderable.texture_id;
 
+                    let RenderLayerIndex(layer_index) = renderable.layer_index;
                     let need_new_layer = renderable.layer_index != current_layer_index;
-
-                    let blend_mode = if need_new_layer {
-                        BlendMode::LayerOpacity
-                    } else {
-                        BlendMode::Accumulate
-                    };
 
                     composite_tile.set_primitive(next_prim_index,
                                                  *instance_index,
-                                                 blend_mode,
-                                                 layer.opacity);
+                                                 layer_index as u32);
 
                     next_prim_index += 1;
                     current_layer_index = renderable.layer_index;
                 }
-
-                println!("{:?}", composite_tile);
 
                 let shader = Some(CompositeShader::Prim1);
 
