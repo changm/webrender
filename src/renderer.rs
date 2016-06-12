@@ -152,7 +152,7 @@ pub struct Renderer {
     cs_text: ProgramId,
     cs_gradient: ProgramId,
 
-    composite_shaders: [ProgramId; 1],
+    composite_shaders: [ProgramId; 4],
     tile_error_shader: ProgramId,
     tile_clear_shader: ProgramId,
 
@@ -208,13 +208,11 @@ impl Renderer {
         let tile_error_shader = create_special_shader("ps_error", &mut device);
         let tile_clear_shader = create_special_shader("ps_clear", &mut device);
 
-        let composite_shaders: [ProgramId; 1] = [
-            create_composite_shader("cs_p1_ic", &mut device)
-            //create_composite_shader("cs_l1_p1", &mut device),
-            //create_composite_shader("cs_l1_p1_ic", &mut device),
-            //create_composite_shader("cs_l1_p2", &mut device),
-            //create_composite_shader("cs_l1_p2_ic", &mut device),
-            //create_composite_shader("cs_l2_p2", &mut device),
+        let composite_shaders: [ProgramId; 4] = [
+            create_composite_shader("cs_p1", &mut device),
+            create_composite_shader("cs_p2", &mut device),
+            create_composite_shader("cs_p3", &mut device),
+            create_composite_shader("cs_p4", &mut device),
         ];
 
         let texture_ids = device.create_texture_ids(1024);

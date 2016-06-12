@@ -129,18 +129,15 @@ impl<TYPE: Clone> Ubo<TYPE> {
     }
 }
 
-const MAX_LAYERS_PER_COMPOSITE: usize = 4;
 const MAX_PRIMS_PER_COMPOSITE: usize = 4;
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Hash)]
 pub enum CompositeShader {
-    Prim1_Opaque,
     Prim1,
-    Prim2_Opaque,
     Prim2,
-
-    Layer2_Prim2_Opaque
+    Prim3,
+    Prim4,
 }
 
 #[derive(Debug, Clone)]
@@ -2168,7 +2165,6 @@ impl FrameBuilder {
                 }
 
                 let mut composite_tile = CompositeTile::new(rect);
-                let mut current_layer_index = RenderLayerIndex(0xffffffff);
                 let mut next_prim_index = 0;
 
                 for instance_index in cover_indices.iter().rev() {
@@ -2177,38 +2173,30 @@ impl FrameBuilder {
                     let RenderableId(ri) = instances[ii as usize];
                     let renderable = &rlist.renderables[ri as usize];
 
-                    let RenderLayerIndex(lid) = renderable.layer_index;
-                    let layer = &self.layers[lid];
-
                     samplers[next_prim_index] = renderable.texture_id;
 
                     let RenderLayerIndex(layer_index) = renderable.layer_index;
-                    let need_new_layer = renderable.layer_index != current_layer_index;
 
                     composite_tile.set_primitive(next_prim_index,
                                                  *instance_index,
                                                  layer_index as u32);
 
                     next_prim_index += 1;
-                    current_layer_index = renderable.layer_index;
                 }
 
-                let shader = Some(CompositeShader::Prim1);
+                let shader = match next_prim_index {
+                    1 => CompositeShader::Prim1,
+                    2 => CompositeShader::Prim2,
+                    3 => CompositeShader::Prim3,
+                    4 => CompositeShader::Prim4,
+                    _ => unreachable!(),
+                };
 
-                match shader {
-                    Some(shader) => {
-                        let batch_key = BatchKey::new(shader, samplers);
-                        let batch = batches.entry(batch_key).or_insert_with(|| {
-                            Vec::new()
-                        });
-                        batch.push(composite_tile);
-                    }
-                    None => {
-                        error_tiles.push(ErrorTile {
-                            rect: *rect,
-                        });
-                    }
-                }
+                let batch_key = BatchKey::new(shader, samplers);
+                let batch = batches.entry(batch_key).or_insert_with(|| {
+                    Vec::new()
+                });
+                batch.push(composite_tile);
             });
         }
 
