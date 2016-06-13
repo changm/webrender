@@ -129,7 +129,7 @@ impl<TYPE: Clone> Ubo<TYPE> {
     }
 }
 
-const MAX_PRIMS_PER_COMPOSITE: usize = 4;
+const MAX_PRIMS_PER_COMPOSITE: usize = 8;
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Hash)]
@@ -153,6 +153,10 @@ impl CompositeTile {
             rect: *rect,
             prim_indices: unsafe { mem::zeroed() },
             layer_indices: [
+                INVALID_LAYER_INDEX,
+                INVALID_LAYER_INDEX,
+                INVALID_LAYER_INDEX,
+                INVALID_LAYER_INDEX,
                 INVALID_LAYER_INDEX,
                 INVALID_LAYER_INDEX,
                 INVALID_LAYER_INDEX,
@@ -2090,6 +2094,10 @@ impl FrameBuilder {
                 TextureId(0),
                 TextureId(0),
                 TextureId(0),
+                TextureId(0),
+                TextureId(0),
+                TextureId(0),
+                TextureId(0),
             ];
 
             bsp_tree.split(self.device_pixel_ratio, &mut |rect, cover_indices, partial_indices| {
@@ -2204,7 +2212,7 @@ impl FrameBuilder {
         // This is sequential due to the shared primitive cache, but should be quick
         // since the main splitting and job ubo creation can be passed to worker threads!
         let mut passes = vec![Pass::new()];
-        let mut prim_cache = PrimitiveCache::new(DevicePixel(1024));
+        let mut prim_cache = PrimitiveCache::new(DevicePixel(2048));
         for tile in &mut tiles {
             if tile.instances.is_empty() {
                 continue;

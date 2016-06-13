@@ -1289,7 +1289,7 @@ impl Renderer {
                 gl::bind_buffer_base(gl::UNIFORM_BUFFER, UBO_BIND_PRIMITIVES, prim_ubo);
 
                 for (key, tiles) in &tile_batch.batches {
-                    let shader = self.composite_shaders[0];//key.shader as usize];
+                    let shader = self.composite_shaders[key.shader as usize];
                     self.device.bind_program(shader, &projection);
                     self.device.bind_cache_texture(self.text_composite_target);
                     for (i, texture_id) in key.samplers.iter().enumerate() {

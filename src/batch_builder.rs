@@ -58,7 +58,7 @@ pub struct BoxShadowMetrics {
 
 impl BoxShadowMetrics {
     pub fn new(box_bounds: &Rect<f32>, border_radius: f32, blur_radius: f32) -> BoxShadowMetrics {
-        let outside_edge_size = 3.0 * blur_radius;
+        let outside_edge_size = 2.0 * blur_radius;
         let inside_edge_size = outside_edge_size.max(border_radius);
         let edge_size = outside_edge_size + inside_edge_size;
         let inner_rect = box_bounds.inflate(-inside_edge_size, -inside_edge_size);
