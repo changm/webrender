@@ -138,6 +138,10 @@ pub enum CompositeShader {
     Prim2,
     Prim3,
     Prim4,
+    Prim5,
+    Prim6,
+    Prim7,
+    Prim8,
 }
 
 #[derive(Debug, Clone)]
@@ -2197,6 +2201,10 @@ impl FrameBuilder {
                     2 => CompositeShader::Prim2,
                     3 => CompositeShader::Prim3,
                     4 => CompositeShader::Prim4,
+                    5 => CompositeShader::Prim5,
+                    6 => CompositeShader::Prim6,
+                    7 => CompositeShader::Prim7,
+                    8 => CompositeShader::Prim8,
                     _ => unreachable!(),
                 };
 

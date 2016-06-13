@@ -113,6 +113,10 @@ pub enum TextureSampler {
     CompositeLayer1,
     CompositeLayer2,
     CompositeLayer3,
+    CompositeLayer4,
+    CompositeLayer5,
+    CompositeLayer6,
+    CompositeLayer7,
 }
 
 pub enum VertexAttribute {

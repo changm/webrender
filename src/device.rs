@@ -1361,6 +1361,22 @@ impl Device {
                 if u_layer3 != -1 {
                     gl::uniform_1i(u_layer3, TextureSampler::CompositeLayer3 as i32);
                 }
+                let u_layer4 = gl::get_uniform_location(program.id, "sLayer4");
+                if u_layer4 != -1 {
+                    gl::uniform_1i(u_layer4, TextureSampler::CompositeLayer4 as i32);
+                }
+                let u_layer5 = gl::get_uniform_location(program.id, "sLayer5");
+                if u_layer5 != -1 {
+                    gl::uniform_1i(u_layer5, TextureSampler::CompositeLayer5 as i32);
+                }
+                let u_layer6 = gl::get_uniform_location(program.id, "sLayer6");
+                if u_layer6 != -1 {
+                    gl::uniform_1i(u_layer6, TextureSampler::CompositeLayer6 as i32);
+                }
+                let u_layer7 = gl::get_uniform_location(program.id, "sLayer7");
+                if u_layer7 != -1 {
+                    gl::uniform_1i(u_layer7, TextureSampler::CompositeLayer7 as i32);
+                }
                 let u_cache = gl::get_uniform_location(program.id, "sCache");
                 if u_cache != -1 {
                     gl::uniform_1i(u_cache, TextureSampler::Cache as i32);
