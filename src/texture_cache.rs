@@ -807,11 +807,15 @@ impl TextureCache {
         // Loop until an allocation succeeds, growing or adding new
         // texture pages as required.
         loop {
+            println!("-- start alloc {:?} --", allocation_size);
+
             let location = page_list.last_mut().and_then(|last_page| {
                 last_page.allocate(&allocation_size, filter)
             });
 
             if let Some(location) = location {
+                println!(" => success!");
+
                 let page = page_list.last_mut().unwrap();
 
                 let allocated_rect = Rect::new(location, allocation_size);
@@ -837,6 +841,9 @@ impl TextureCache {
                 // Grow the texture.
                 let texture_size = cmp::min(last_page.texture_size * 2,
                                             max_texture_size());
+
+                println!("grow page {:?} -> {:?}", last_page.texture_size, texture_size);
+
                 self.pending_updates.push(TextureUpdate {
                     id: last_page.texture_id,
                     op: texture_grow_op(texture_size, format, mode),
@@ -877,6 +884,8 @@ impl TextureCache {
             }
             let free_texture_level = free_texture_levels.pop().unwrap();
             let texture_id = free_texture_level.texture_id;
+
+            println!("new page {:?}", texture_size);
 
             let page = TexturePage::new(texture_id, texture_size);
             page_list.push(page);
