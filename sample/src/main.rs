@@ -23,6 +23,7 @@ use webrender_traits::{BlobImageData, BlobImageDescriptor, BlobImageError, BlobI
 use webrender_traits::{BlobImageResult, ClipRegion, ColorF, DeviceIntPoint, DeviceUintSize, Epoch, GlyphInstance};
 use webrender_traits::{ImageData, ImageDescriptor, ImageFormat, ImageKey, ImageRendering};
 use webrender_traits::{LayoutPoint, LayoutRect, LayoutSize, PipelineId, RasterizedBlobImage};
+use webrender_traits::BoxShadowClipMode;
 
 #[derive(Debug)]
 enum Gesture {
@@ -242,7 +243,7 @@ fn main() {
     renderer.set_render_notifier(notifier);
 
     let epoch = Epoch(0);
-    let root_background_color = ColorF::new(0.3, 0.0, 0.0, 1.0);
+    let root_background_color = ColorF::new(1.0, 1.0, 1.0, 1.0);
 
     let vector_img = api.generate_image_key();
     api.add_image(
@@ -264,6 +265,8 @@ fn main() {
         builder.new_clip_region(&bounds, vec![complex], None)
     };
 
+    let full_screen_clip = builder.new_clip_region(&bounds, vec![], None);
+
     builder.push_stacking_context(webrender_traits::ScrollPolicy::Scrollable,
                                   bounds,
                                   clip_region,
@@ -280,6 +283,7 @@ fn main() {
         ImageRendering::Auto,
         vector_img,
     );
+    /*
 
     let sub_clip = {
         let mask_image = api.generate_image_key();
@@ -396,6 +400,66 @@ fn main() {
                           Au::from_px(32),
                           Au::from_px(0),
                           None);
+    }
+    */
+
+    if true { // draw box shadow?
+        let rect = LayoutRect::new(LayoutPoint::new(0.0, 0.0), LayoutSize::new(0.0, 0.0));
+        let simple_box_bounds = LayoutRect::new(LayoutPoint::new(22.0, 164.0),
+                                                LayoutSize::new(40.0, 50.0));
+        let offset = LayoutPoint::new(18.0, 9.0);
+        let color = ColorF::new(0.0, 0.0, 0.0, 1.0);
+        let blur_radius = 2.0;
+        let spread_radius = 0.0;
+        let simple_border_radius = 10.0;
+        let box_shadow_type = BoxShadowClipMode::Inset;
+
+        builder.push_box_shadow(rect,
+                                full_screen_clip,
+                                simple_box_bounds,
+                                offset,
+                                color,
+                                blur_radius,
+                                spread_radius,
+                                simple_border_radius,
+                                box_shadow_type);
+
+        let dupe_box_bounds = LayoutRect::new(LayoutPoint::new(122.0, 264.0),
+                                              LayoutSize::new(100.0, 100.0));
+
+        builder.push_box_shadow(rect,
+                                full_screen_clip,
+                                dupe_box_bounds,
+                                offset,
+                                color,
+                                blur_radius,
+                                spread_radius,
+                                simple_border_radius,
+                                box_shadow_type);
+
+
+/*
+        let curved_box_bounds = LayoutRect::new(LayoutPoint::new(500.0, 500.0), LayoutSize::new(100.0, 100.0));
+        let border_radius = 20.0;
+        let blur_clip = {
+            let complex = webrender_traits::ComplexClipRegion::new(
+                curved_box_bounds,
+                webrender_traits::BorderRadius::uniform(border_radius)
+            );
+
+            builder.new_clip_region(&bounds, vec![complex], None)
+        };
+
+        builder.push_box_shadow(rect,
+                                blur_clip,
+                                curved_box_bounds,
+                                offset,
+                                color,
+                                blur_radius,
+                                spread_radius,
+                                border_radius,
+                                box_shadow_type);
+                                */
     }
 
     builder.pop_stacking_context();

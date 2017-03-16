@@ -112,8 +112,11 @@ pub fn subtract_rect<U>(rect: &TypedRect<f32, U>,
                         other: &TypedRect<f32, U>,
                         results: &mut Vec<TypedRect<f32, U>>) {
     results.clear();
+    results.push(*rect);
 
+/*
     let int = rect.intersection(other);
+    println!("Rect is: {:?}, other: {:?} int: {:?}", rect, other, int);
     match int {
         Some(int) => {
             let rx0 = rect.origin.x;
@@ -147,7 +150,9 @@ pub fn subtract_rect<U>(rect: &TypedRect<f32, U>,
             results.push(*rect);
         }
     }
+    */
 }
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 #[repr(u8)]
 pub enum TransformedRectKind {
