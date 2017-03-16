@@ -1332,6 +1332,10 @@ impl Renderer {
                     }
                 };
 
+                if batch.key.kind == AlphaBatchKind::BoxShadow {
+                    return;
+                }
+
                 let shader = shader.unwrap();
 
                 let _gm = self.gpu_profile.add_marker(marker);
