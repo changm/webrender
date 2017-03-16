@@ -810,6 +810,8 @@ impl PrimitiveStore {
                     clip_task: None,
                 };
 
+                println!("Box shadow metadata is: {:?}", metadata);
+
                 for rect in instance_rects {
                     self.gpu_data16.push(InstanceRect {
                         rect: rect,

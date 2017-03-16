@@ -948,7 +948,6 @@ impl FrameBuilder {
                     BoxShadowClipMode::Inset => 1.0,
                 };
 
-
                 let prim_gpu = BoxShadowPrimitiveGpu {
                     src_rect: *box_bounds,
                     bs_rect: bs_rect,
