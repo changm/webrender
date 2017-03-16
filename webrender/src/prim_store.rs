@@ -775,6 +775,7 @@ impl PrimitiveStore {
                     shadow_rect_size: Size2D::new(Au::from_f32_px(box_shadow_gpu.bs_rect.size.width),
                                                   Au::from_f32_px(box_shadow_gpu.bs_rect.size.height)),
                 });
+                println!("Cache key is: {:?}, prim index: {:?}", cache_key, prim_index);
 
                 // The actual cache size is calculated during prepare_prim_for_render().
                 // This is necessary since the size may change depending on the device

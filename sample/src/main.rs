@@ -245,6 +245,7 @@ fn main() {
     let epoch = Epoch(0);
     let root_background_color = ColorF::new(1.0, 1.0, 1.0, 1.0);
 
+/*
     let vector_img = api.generate_image_key();
     api.add_image(
         vector_img,
@@ -252,6 +253,7 @@ fn main() {
         ImageData::new_blob_image(Vec::new()),
         None,
     );
+    */
 
     let pipeline_id = PipelineId(0, 0);
     let mut builder = webrender_traits::DisplayListBuilder::new(pipeline_id);
@@ -275,6 +277,7 @@ fn main() {
                                   None,
                                   webrender_traits::MixBlendMode::Normal,
                                   Vec::new());
+                                  /*
     builder.push_image(
         LayoutRect::new(LayoutPoint::new(0.0, 0.0), LayoutSize::new(100.0, 100.0)),
         ClipRegion::simple(&bounds),
@@ -283,7 +286,6 @@ fn main() {
         ImageRendering::Auto,
         vector_img,
     );
-    /*
 
     let sub_clip = {
         let mask_image = api.generate_image_key();

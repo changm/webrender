@@ -959,6 +959,8 @@ impl FrameBuilder {
                     inverted: inverted,
                 };
 
+                println!("Adding prim gpu: {:?}", prim_gpu);
+
                 self.add_primitive(scroll_layer_id,
                                    &outer_rect,
                                    clip_region,
