@@ -6,7 +6,7 @@
 void main(void) {
     Primitive prim = load_primitive();
     //BoxShadow bs = fetch_boxshadow(prim.prim_index);
-    BoxShadow bs = fetch_boxshadow(aGlobalPrimId);
+    BoxShadow bs = fetch_boxshadow(prim.prim_index);
     RectWithSize segment_rect = fetch_instance_geometry(prim.sub_index);
 
     VertexInfo vi = write_vertex(segment_rect,
@@ -31,5 +31,5 @@ void main(void) {
 
     vColor = bs.color;
     vBS_rect = bs.bs_rect;
-    vIndex = prim.prim_index;
+    vIndex = aGlobalPrimId;
 }

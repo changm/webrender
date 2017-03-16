@@ -961,7 +961,7 @@ impl RenderTarget {
 
                 match prim_metadata.prim_kind {
                     PrimitiveKind::BoxShadow => {
-                        println!("Adding box shadow cache primitive");
+                        println!("Adding box shadow cache primitive index: {:?}", prim_index);
                         self.box_shadow_cache_prims.push(PrimitiveInstance {
                             global_prim_id: prim_index.0 as i32,
                             prim_address: prim_metadata.gpu_prim_index,

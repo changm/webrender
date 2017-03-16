@@ -177,6 +177,7 @@ impl FrameBuilder {
                                                        Box::new(clip_source),
                                                        clip_info,
                                                        container);
+        println!("Added prim index: {:?}", prim_index);
 
         match self.cmds.last_mut().unwrap() {
             &mut PrimitiveRunCmd::PrimitiveRun(_run_prim_index, ref mut count, run_layer_id)
