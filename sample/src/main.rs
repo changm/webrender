@@ -409,11 +409,11 @@ fn main() {
         let rect = LayoutRect::new(LayoutPoint::new(0.0, 0.0), LayoutSize::new(0.0, 0.0));
         let simple_box_bounds = LayoutRect::new(LayoutPoint::new(22.0, 164.0),
                                                 LayoutSize::new(40.0, 50.0));
-        let offset = LayoutPoint::new(18.0, 9.0);
+        let offset = LayoutPoint::new(10.0, 20.0);
         let color = ColorF::new(0.0, 0.0, 0.0, 1.0);
         let blur_radius = 2.0;
         let spread_radius = 0.0;
-        let simple_border_radius = 10.0;
+        let simple_border_radius = 0.0;
         let box_shadow_type = BoxShadowClipMode::Inset;
 
         builder.push_box_shadow(rect,
@@ -426,9 +426,10 @@ fn main() {
                                 simple_border_radius,
                                 box_shadow_type);
 
-        let dupe_box_bounds = LayoutRect::new(LayoutPoint::new(122.0, 264.0),
-                                              LayoutSize::new(100.0, 100.0));
+        let dupe_box_bounds = LayoutRect::new(LayoutPoint::new(122.0, 164.0),
+                                              LayoutSize::new(40.0, 50.0));
 
+/*
         builder.push_box_shadow(rect,
                                 full_screen_clip,
                                 dupe_box_bounds,
@@ -438,6 +439,19 @@ fn main() {
                                 spread_radius,
                                 simple_border_radius,
                                 box_shadow_type);
+                                */
+
+        let broken_blur_radius = 4.0;
+        builder.push_box_shadow(rect,
+                                full_screen_clip,
+                                dupe_box_bounds,
+                                offset,
+                                color,
+                                broken_blur_radius, 
+                                spread_radius,
+                                simple_border_radius,
+                                box_shadow_type);
+
 
 
 /*
