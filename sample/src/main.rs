@@ -416,7 +416,6 @@ fn main() {
         let simple_border_radius = 0.0;
         let box_shadow_type = BoxShadowClipMode::Inset;
 
-/*
         builder.push_box_shadow(rect,
                                 full_screen_clip,
                                 simple_box_bounds,
@@ -426,7 +425,6 @@ fn main() {
                                 spread_radius,
                                 simple_border_radius,
                                 box_shadow_type);
-                                */
 
         let dupe_box_bounds = LayoutRect::new(LayoutPoint::new(122.0, 164.0),
                                               LayoutSize::new(40.0, 50.0));
