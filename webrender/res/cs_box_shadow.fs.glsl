@@ -145,4 +145,5 @@ void main(void) {
 
     value = max(value, 0.0);
     oFragColor = vec4(1.0, 1.0, 1.0, vInverted == 1.0 ? 1.0 - value : value);
+    //oFragColor = vec4(1.0, 1.0, 1.0, 0.5);
 }

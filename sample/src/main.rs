@@ -13,6 +13,7 @@ use app_units::Au;
 use euclid::Point2D;
 use gleam::gl;
 use glutin::TouchPhase;
+use glutin::GlProfile;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -206,9 +207,10 @@ fn main() {
                 .with_title("WebRender Sample")
                 .with_multitouch()
                 .with_gl(glutin::GlRequest::GlThenGles {
-                    opengl_version: (3, 2),
-                    opengles_version: (3, 0)
+                    opengl_version: (4, 0),
+                    opengles_version: (4, 0)
                 })
+                .with_gl_profile(GlProfile::Core)
                 .build()
                 .unwrap();
 

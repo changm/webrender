@@ -29,7 +29,15 @@ void main(void) {
     vec2 texture_size = vec2(textureSize(sCache, 0));
     vCacheUvRectCoords = vec4(patch_origin, patch_origin + patch_size_device_pixels) / texture_size.xyxy;
 
+    vOrigCoord = (vi.local_pos - prim.local_rect.p0) / prim.local_rect.size;
+
     vColor = bs.color;
     vBS_rect = bs.bs_rect;
     vIndex = aGlobalPrimId;
+    vPatchSize = patch_size;
+    vOrigin = patch_origin;
+    vPatchDevice = patch_size_device_pixels;
+    vTextureSize = texture_size;
+    vZ = vUv.z;
+    vLocalRect = vec4(prim.local_rect.p0, prim.local_rect.size);
 }

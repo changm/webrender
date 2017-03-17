@@ -353,7 +353,8 @@ impl AlphaBatchHelpers for PrimitiveStore {
                         let cache_task_id = &metadata.render_task.as_ref().unwrap().id;
                         let cache_task_index = render_tasks.get_task_index(cache_task_id,
                                                                            child_pass_index);
-
+                        println!("Cache task id: {:?}, index: {:?}", cache_task_id, cache_task_index);
+                        println!("User data is going to be: {:?}", cache_task_index.0);
                         for rect_index in 0..metadata.gpu_data_count {
                             data.push(PrimitiveInstance {
                                 task_index: task_index,
@@ -962,6 +963,7 @@ impl RenderTarget {
                 match prim_metadata.prim_kind {
                     PrimitiveKind::BoxShadow => {
                         println!("Adding box shadow cache primitive index: {:?}", prim_index);
+                        println!("Task id is: {:?}", task.id);
                         self.box_shadow_cache_prims.push(PrimitiveInstance {
                             global_prim_id: prim_index.0 as i32,
                             prim_address: prim_metadata.gpu_prim_index,
@@ -1100,6 +1102,7 @@ impl RenderPass {
 
                     let alloc_size = DeviceUintSize::new(size.width as u32, size.height as u32);
                     let alloc_origin = self.allocate_target(alloc_size);
+                    println!("Alloc origin is: {:?}", alloc_origin);
 
                     *origin = Some((DeviceIntPoint::new(alloc_origin.x as i32,
                                                      alloc_origin.y as i32),
