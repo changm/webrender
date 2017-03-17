@@ -210,7 +210,6 @@ fn main() {
                     opengl_version: (4, 0),
                     opengles_version: (4, 0)
                 })
-                .with_gl_profile(GlProfile::Core)
                 .build()
                 .unwrap();
 
@@ -231,9 +230,10 @@ fn main() {
     let opts = webrender::RendererOptions {
         resource_override_path: res_path,
         debug: true,
+        render_target_debug: true,
         precache_shaders: true,
         blob_image_renderer: Some(Box::new(FakeBlobImageRenderer::new())),
-        device_pixel_ratio: window.hidpi_factor(),
+        //device_pixel_ratio: window.hidpi_factor(),
         .. Default::default()
     };
 

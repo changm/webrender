@@ -453,6 +453,7 @@ impl RenderTaskCollection {
             }
             RenderTaskId::Dynamic(key) => {
                 let index = RenderTaskIndex(self.render_task_data.len());
+                println!("Render Task index: {:?}", index);
                 let key = (key, pass);
                 debug_assert!(self.dynamic_tasks.contains_key(&key) == false);
                 self.dynamic_tasks.insert(key, DynamicTaskInfo {

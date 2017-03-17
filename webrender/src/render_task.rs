@@ -296,6 +296,7 @@ impl RenderTask {
     // via a vertex texture.
     pub fn write_task_data(&self) -> RenderTaskData {
         let (target_rect, target_index) = self.get_target_rect();
+        println!("Target rect is: {:?}", target_rect);
 
         // NOTE: The ordering and layout of these structures are
         //       required to match both the GPU structures declared
