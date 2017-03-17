@@ -1102,7 +1102,7 @@ impl RenderPass {
 
                     let alloc_size = DeviceUintSize::new(size.width as u32, size.height as u32);
                     let alloc_origin = self.allocate_target(alloc_size);
-                    println!("Alloc origin is: {:?}", alloc_origin);
+                    println!("Alloc origin is: {:?}, size: {:?}", alloc_origin, alloc_size);
 
                     *origin = Some((DeviceIntPoint::new(alloc_origin.x as i32,
                                                      alloc_origin.y as i32),
